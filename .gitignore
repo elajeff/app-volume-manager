@@ -1,0 +1,10 @@
+.venv/
+.venv-build/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+build/
+dist/
+*.spec.bak
+*.log

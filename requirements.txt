@@ -1,0 +1,10 @@
+# Windows per-application audio sessions
+pycaw==20260927
+comtypes>=1.4.12,<2.0
+
+# System tray icon
+pystray>=0.19.5,<0.20
+Pillow>=10.0,<13.0
+
+# Resolve process details and command-line role information.
+psutil>=6.0,<8.0
