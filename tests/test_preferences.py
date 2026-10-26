@@ -14,12 +14,12 @@ class PreferenceStoreTests(unittest.TestCase):
         self.store = PreferenceStore(self.path)
 
     def test_defaults_and_theme_changes_survive_reload(self):
-        self.assertEqual(self.store.load_theme(), "light")
+        self.assertEqual(self.store.load_preferences()[0], "light")
         self.store.save_theme("dark")
         reloaded = PreferenceStore(self.path)
         self.assertEqual(reloaded.load_preferences(), ("dark", "#1677FF"))
         reloaded.save_theme("light")
-        self.assertEqual(reloaded.load_theme(), "light")
+        self.assertEqual(reloaded.load_preferences()[0], "light")
 
     def test_custom_slider_color_survives_theme_changes_and_older_settings(self):
         self.path.write_text(json.dumps({"version": 1, "theme": "dark"}), encoding="utf-8")
@@ -33,7 +33,7 @@ class PreferenceStoreTests(unittest.TestCase):
             json.dumps({"version": 1, "theme": "dark", "knob_color": "#ab12cd"}),
             encoding="utf-8",
         )
-        self.assertEqual(self.store.load_slider_thumb_color(), "#AB12CD")
+        self.assertEqual(self.store.load_preferences()[1], "#AB12CD")
         self.store.save_theme("light")
         saved = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(saved["slider_thumb_color"], "#AB12CD")
@@ -51,7 +51,7 @@ class PreferenceStoreTests(unittest.TestCase):
         original = "{broken"
         self.path.write_text(original, encoding="utf-8")
         with self.assertRaises(SettingsError):
-            self.store.load_theme()
+            self.store.load_preferences()[0]
         self.assertEqual(self.path.read_text(encoding="utf-8"), original)
 
 

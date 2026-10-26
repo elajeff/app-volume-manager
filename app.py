@@ -611,6 +611,7 @@ class VolumeManagerApp:
             self.tray_icon.run_detached()
         except Exception as exc:
             # The main window still works if the tray library can't initialize.
+            self.tray_icon = None
             self.status_var.set(f"System tray unavailable: {exc}")
 
     def _tray_show(self, _icon, _item) -> None:
@@ -635,17 +636,7 @@ class VolumeManagerApp:
 
     def hide_to_tray(self) -> None:
         if self.tray_icon is None:
-            self.root.iconify()
-            self.window_visible = False
-            self._schedule_poll(
-                refresh_interval_ms(
-                    False, bool(
-                        self.audio_monitor and self.audio_monitor.is_ready
-                        and not self.audio_monitor.last_error
-                    )
-                )
-            )
-            self.status_var.set("System tray unavailable; window minimized instead.")
+            self.close()
             return
         self.root.withdraw()
         self.window_visible = False
@@ -945,11 +936,11 @@ class VolumeManagerApp:
         self.status_var.set(f"Removed {len(remove_keys)} saved rule(s). Current volumes are not reset.")
 
     def add_rule(self) -> None:
-        self._rule_dialog(None)
+        self._rule_dialog()
 
-    def _rule_dialog(self, existing: AppRule | None) -> None:
+    def _rule_dialog(self) -> None:
         dialog = tk.Toplevel(self.root)
-        dialog.title("Add application rule" if existing is None else "Edit application rule")
+        dialog.title("Add application rule")
         dialog.transient(self.root)
         dialog.resizable(False, False)
         frame = ttk.Frame(dialog, padding=16)
@@ -958,7 +949,7 @@ class VolumeManagerApp:
         ttk.Label(frame, text="Executable name. This rule applies to every process using this executable.").grid(
             row=0, column=0, columnspan=2, sticky="w"
         )
-        name_var = tk.StringVar(value=existing.executable if existing else "")
+        name_var = tk.StringVar(value="")
         name_entry = ttk.Entry(frame, textvariable=name_var, width=38)
         name_entry.grid(row=1, column=0, sticky="ew", pady=(4, 4))
         ttk.Button(
@@ -974,7 +965,7 @@ class VolumeManagerApp:
         detected.grid(row=3, column=0, sticky="ew", pady=(4, 4))
         detected.bind("<<ComboboxSelected>>", lambda _event: name_var.set(detected_var.get()))
 
-        volume_var = tk.DoubleVar(value=existing.volume if existing else int(self.target_volume_var.get()))
+        volume_var = tk.DoubleVar(value=int(self.target_volume_var.get()))
         volume_label_var = tk.StringVar(value=f"Target volume: {int(volume_var.get())}%")
         ttk.Label(frame, textvariable=volume_label_var).grid(
             row=4, column=0, columnspan=2, sticky="w", pady=(10, 0)
@@ -992,7 +983,7 @@ class VolumeManagerApp:
         )
         scale.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 8))
         scale.bind("<Button-1>", allow_scale_thumb_click)
-        enabled_var = tk.BooleanVar(value=existing.enabled if existing else True)
+        enabled_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(frame, text="Apply this rule automatically", variable=enabled_var).grid(
             row=6, column=0, columnspan=2, sticky="w", pady=(2, 8)
         )
