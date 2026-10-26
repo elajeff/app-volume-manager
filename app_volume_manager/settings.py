@@ -14,9 +14,9 @@ class SettingsError(Exception):
 
 def _write_json_atomically(path: Path, data: dict, label: str) -> None:
     """Write JSON via a temporary file so interruptions don't leave partial settings."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", newline="\n", delete=False,
             dir=path.parent, prefix=f"{label}-", suffix=".tmp"
@@ -138,14 +138,6 @@ class PreferenceStore:
         """Return the saved theme and slider color, with migration for older installs."""
         data = self._read_preferences()
         return data["theme"], data["slider_thumb_color"]
-
-    def load_theme(self) -> str:
-        """Load the saved appearance theme."""
-        return self.load_preferences()[0]
-
-    def load_slider_thumb_color(self) -> str:
-        """Load the saved slider color."""
-        return self.load_preferences()[1]
 
     def save_theme(self, theme: str) -> None:
         if not isinstance(theme, str) or theme.casefold() not in self.THEMES:

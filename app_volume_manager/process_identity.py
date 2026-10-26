@@ -33,16 +33,13 @@ def identify_process_role(
     index = 1  # cmdline[0] is the executable path
     while index < len(command_line):
         argument = str(command_line[index])
-        matched = False
         for switch, key in _ROLE_SWITCHES.items():
             if argument.casefold().startswith(switch + "="):
                 values[key] = argument.split("=", 1)[1].strip().casefold()
-                matched = True
                 break
             if argument.casefold() == switch and index + 1 < len(command_line):
                 values[key] = str(command_line[index + 1]).strip().casefold()
                 index += 1
-                matched = True
                 break
         index += 1
 

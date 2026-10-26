@@ -99,7 +99,7 @@ class WindowsAudioBackend:
             return None
 
         signature, role = identify_process_role(executable, command_line)
-        return process_id, executable, executable_path, signature, role
+        return process_id, executable, signature, role
 
     def wrap_notified_session(self, raw_session, endpoint_id: str, device_name: str, index: int):
         """Wrap a session delivered by Core Audio's session-created callback.
@@ -122,7 +122,7 @@ class WindowsAudioBackend:
         process_details = self._read_process(session)
         if process_details is None:
             return None
-        process_id, executable, executable_path, signature, role = process_details
+        process_id, executable, signature, role = process_details
 
         try:
             instance_identifier = str(session.InstanceIdentifier or "")
