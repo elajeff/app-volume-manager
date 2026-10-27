@@ -110,8 +110,13 @@ class WindowsAudioBackend:
         try:
             from pycaw.pycaw import AudioSession as PycawAudioSession, IAudioSessionControl2
 
-            control2 = raw_session.QueryInterface(IAudioSessionControl2)
-            session = PycawAudioSession(control2)
+            # Pycaw's notification class already wraps OnSessionCreated's COM
+            # argument. Enumeration callers may still supply the raw interface.
+            if isinstance(raw_session, PycawAudioSession):
+                session = raw_session
+            else:
+                control2 = raw_session.QueryInterface(IAudioSessionControl2)
+                session = PycawAudioSession(control2)
             return self._wrap_session(session, endpoint_id, device_name, index)
         except Exception:
             # The regular enumeration path will retry if this transient session

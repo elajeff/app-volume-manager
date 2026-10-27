@@ -33,6 +33,8 @@ class SettingsStoreTests(unittest.TestCase):
                 self.path.write_text(original, encoding="utf-8")
                 with self.assertRaises(SettingsError):
                     self.store.load_rules()
+                with self.assertRaisesRegex(SettingsError, "Saving is blocked"):
+                    self.store.save_rules([AppRule("Discord.exe", 15)])
                 self.assertEqual(self.path.read_text(encoding="utf-8"), original)
 
     def test_duplicate_rules_are_rejected(self):

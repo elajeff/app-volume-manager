@@ -48,9 +48,11 @@ def default_settings_path() -> Path:
 class SettingsStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else default_settings_path()
+        self._load_failed = False
 
     def load_rules(self) -> list[AppRule]:
         if not self.path.exists():
+            self._load_failed = False
             return []
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -67,14 +69,21 @@ class SettingsStore:
                     raise ValueError(f"Duplicate rule for {rule.executable}.")
                 rules.append(rule)
                 seen.add(rule.key)
+            self._load_failed = False
             return rules
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._load_failed = True
             raise SettingsError(
                 f"Could not read settings file:\n{self.path}\n\n"
                 f"The original file was left untouched. Details: {exc}"
             ) from exc
 
     def save_rules(self, rules: list[AppRule]) -> None:
+        if self._load_failed:
+            raise SettingsError(
+                "Saving is blocked because the original rules could not be loaded. "
+                "Repair or rename settings.json, then restart the app before saving rules."
+            )
         data = {
             "version": 1,
             "rules": [rule.to_dict() for rule in rules],

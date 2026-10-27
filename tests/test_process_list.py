@@ -2,7 +2,7 @@ import unittest
 
 from app_volume_manager.process_list import build_process_rows
 from app_volume_manager.rules import AppRule
-from app_volume_manager.volume_service import AudioSession
+from app_volume_manager.volume_service import AudioSession, VolumeRuleEngine
 
 
 class ProcessListTests(unittest.TestCase):
@@ -40,6 +40,21 @@ class ProcessListTests(unittest.TestCase):
         rows = build_process_rows([self.session()], [AppRule("vlc.exe", 60)])
         self.assertTrue(rows[0].active)
         self.assertFalse(rows[1].active)
+
+    def test_displayed_rule_matches_engine_for_enabled_and_disabled_profiles(self):
+        signature = "discord.exe|main"
+        for profile_enabled, app_enabled in ((True, True), (False, True), (True, False), (False, False)):
+            with self.subTest(profile=profile_enabled, app=app_enabled):
+                calls = []
+                session = AudioSession("Discord.exe", "voice", calls.append,
+                                       current_volume=100, process_id=123, process_signature=signature)
+                rules = [AppRule("Discord.exe", 70, app_enabled),
+                         AppRule("Discord.exe", 15, profile_enabled, signature)]
+                row = build_process_rows([session], rules)[0]
+                VolumeRuleEngine().scan([session], rules)
+                self.assertEqual(calls, [row.rule.volume] if row.rule.enabled else [])
+                if not profile_enabled and app_enabled:
+                    self.assertEqual(row.rule.volume, 70)
 
     def test_process_role_rule_overrides_app_rule_only_for_matching_instance(self):
         signature = "discord.exe|type=utility;subtype=audio"

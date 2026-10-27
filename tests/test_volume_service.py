@@ -38,6 +38,36 @@ class VolumeRuleEngineTests(unittest.TestCase):
         self.engine.scan([session], [])
         self.assertEqual(self.calls, [("session-1", 25), ("session-1", 70), ("session-1", 70)])
 
+    def test_saved_rules_restore_external_resets_for_each_app_without_redundant_writes(self):
+        for executable in ("Discord.exe", "Spotify.exe", "chrome.exe"):
+            with self.subTest(executable=executable):
+                engine = VolumeRuleEngine()
+                calls = []
+                session = AudioSession(executable, "session", calls.append, current_volume=100)
+                rules = [AppRule(executable, 15)]
+                engine.scan([session], rules)
+                engine.scan([session], rules)
+                session.current_volume = 100  # The app or Windows mixer reset it.
+                engine.scan([session], rules)
+                engine.scan([session], rules)
+                self.assertEqual(calls, [15, 15])
+                self.assertEqual(session.current_volume, 15)
+                # Removing a rule stops enforcement.
+                session.current_volume = 60
+                engine.scan([session], [])
+                self.assertEqual(calls, [15, 15])
+
+    def test_notified_session_respects_temporary_override_and_restores_reset(self):
+        calls = []
+        session = AudioSession("Discord.exe", "session", calls.append,
+                               process_id=123, current_volume=100)
+        targets = {(123, "discord.exe"): 20}
+        rules = [AppRule("Discord.exe", 70)]
+        self.engine.apply_new_session(session, rules, targets)
+        session.current_volume = 100
+        self.engine.apply_new_session(session, rules, targets)
+        self.assertEqual(calls, [20, 20])
+
     def test_adjusts_all_matching_sessions_and_continues_after_an_error(self):
         sessions = [self.session(session_id="bad", error="denied"),
                     self.session(session_id="good-1"), self.session(session_id="good-2")]
