@@ -1119,8 +1119,8 @@ class VolumeManagerApp:
 
     def open_settings_folder(self) -> None:
         path = self.store.path.parent
-        path.mkdir(parents=True, exist_ok=True)
         try:
+            path.mkdir(parents=True, exist_ok=True)
             os.startfile(path)  # type: ignore[attr-defined]  # Windows-only app
         except OSError as exc:
             messagebox.showerror(APP_NAME, f"Could not open settings folder:\n{exc}")

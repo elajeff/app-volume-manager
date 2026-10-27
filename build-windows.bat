@@ -33,7 +33,7 @@ if errorlevel 1 goto :failed
 
 echo.
 echo Building App Volume Manager.exe with the application icon...
-".venv-build\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name "App Volume Manager" --icon "assets\app-icon.ico" --add-data "assets;assets" --collect-all pycaw --collect-all comtypes app.py
+".venv-build\Scripts\python.exe" -m PyInstaller --noconfirm --clean "App Volume Manager.spec"
 if errorlevel 1 goto :failed
 
 if not exist "dist\App Volume Manager\App Volume Manager.exe" (
