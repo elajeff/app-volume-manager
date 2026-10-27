@@ -77,3 +77,17 @@ class AppRule:
             process_signature=signature,
             process_role=role,
         )
+
+
+def resolve_rule(
+    executable: str, signature: str | None,
+    app_rules: dict[str, AppRule], process_rules: dict[str, AppRule],
+) -> AppRule | None:
+    """Use an enabled profile or app rule; retain a disabled rule for display."""
+    profile = process_rules.get(signature) if signature else None
+    app_rule = app_rules.get(executable.casefold())
+    if profile is not None and profile.enabled:
+        return profile
+    if app_rule is not None and app_rule.enabled:
+        return app_rule
+    return profile or app_rule

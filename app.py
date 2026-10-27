@@ -5,9 +5,12 @@ import ctypes
 import os
 import queue
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+import psutil
 
 from app_volume_manager.audio_backend import AudioBackendError, WindowsAudioBackend
 from app_volume_manager.audio_monitor import AudioSessionMonitor, refresh_interval_ms
@@ -16,7 +19,8 @@ from app_volume_manager.process_list import ProcessRow, build_process_rows
 from app_volume_manager.rules import AppRule
 from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
-from app_volume_manager.startup import is_startup_enabled, set_startup_enabled
+from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
+from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.volume_service import VolumeRuleEngine
 
 APP_NAME = "App Volume Manager"
@@ -64,6 +68,8 @@ def allow_scale_thumb_click(event) -> str | None:
 class VolumeManagerApp:
     def __init__(self, root: tk.Tk, start_minimized: bool = False) -> None:
         self.root = root
+        if start_minimized:
+            self.root.withdraw()
         self.store = SettingsStore()
         self.preference_store = PreferenceStore()
         self.theme = "light"
@@ -80,6 +86,7 @@ class VolumeManagerApp:
         # Temporary PID-scoped targets are used only when Windows doesn't expose
         # enough stable role information to create a safe persistent profile.
         self.temporary_process_targets: dict[tuple[int, str], int] = {}
+        self.temporary_processes: dict[tuple[int, str], psutil.Process] = {}
         self.tray_icon = None
         self._closing = False
         self.audio_ready = False
@@ -89,6 +96,9 @@ class VolumeManagerApp:
         self._audio_event_after_id = None
         self._audio_event_queue: queue.SimpleQueue = queue.SimpleQueue()
         self.audio_monitor: AudioSessionMonitor | None = None
+        self._startup_busy = False
+        self._startup_enabled = False
+        self._startup_results: queue.SimpleQueue = queue.SimpleQueue()
 
         self.root.title(APP_NAME)
         self.root.geometry("1000x620")
@@ -98,57 +108,58 @@ class VolumeManagerApp:
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         self.root.bind("<Map>", self._on_visibility_event, add="+")
         self.root.bind("<Unmap>", self._on_visibility_event, add="+")
-        self._set_window_icon()
-
+        startup_errors = []
         try:
             self.rules = self.store.load_rules()
         except SettingsError as exc:
-            messagebox.showwarning(
-                APP_NAME,
-                "Saved volume rules could not be loaded. No rules will be applied until they are fixed.\n\n"
-                f"{exc}",
-            )
+            startup_errors.append(str(exc))
 
-        try:
-            self.theme, self.slider_thumb_color = self.preference_store.load_preferences()
-        except SettingsError as exc:
-            messagebox.showwarning(
-                APP_NAME,
-                "Appearance preferences could not be loaded. Light mode and the default blue "
-                "slider will be used.\n\n" f"{exc}",
-            )
-            self.theme = "light"
-            self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
-
-        self._apply_theme(self.theme)
-        self._build_ui()
-
+        # Protect audio before loading appearance assets or constructing the UI.
         try:
             self.backend.initialize()
             self.audio_ready = True
         except AudioBackendError as exc:
-            self.status_var.set(str(exc))
-
-        try:
-            self.startup_var.set(is_startup_enabled())
-        except OSError:
-            self.startup_var.set(False)
-        self._update_startup_status()
-
-        self._start_tray_icon()
+            startup_errors.append(str(exc))
         self.audio_monitor = AudioSessionMonitor(
             wrap_session=self.backend.wrap_notified_session,
             on_session_created=self._apply_notified_session,
             on_change=self._queue_audio_event,
         )
         self.audio_monitor.start()
+        if self.audio_ready:
+            try:
+                self.last_sessions = self.backend.get_sessions()
+                result = self.engine.scan(self.last_sessions, self.rules)
+                startup_errors.extend(result.errors)
+            except Exception as exc:
+                startup_errors.append(f"Initial audio scan failed; will retry: {exc}")
+
+        try:
+            self.theme, self.slider_thumb_color = self.preference_store.load_preferences()
+        except SettingsError as exc:
+            startup_errors.append(str(exc))
+            self.theme = "light"
+            self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
+
+        self._set_window_icon()
+        self._apply_theme(self.theme)
+        self._build_ui()
+
+        self._start_startup_update(None)
+
+        self._start_tray_icon()
         self._audio_event_after_id = self.root.after(
             AUDIO_EVENT_CHECK_MS, self._process_audio_events
         )
         if start_minimized and self.tray_icon is not None:
-            self.root.withdraw()
             self.window_visible = False
+        elif start_minimized:
+            self.root.deiconify()  # Keep the app reachable if tray setup fails.
         self._schedule_poll(300)
+        if startup_errors:
+            self.status_var.set(startup_errors[0])
+            if not start_minimized:
+                self.root.after(0, lambda: messagebox.showwarning(APP_NAME, "\n\n".join(startup_errors)))
 
     def _set_window_icon(self) -> None:
         icon_path = resource_path("assets/app-icon.ico")
@@ -505,12 +516,13 @@ class VolumeManagerApp:
         startup_controls = ttk.Frame(footer)
         startup_controls.grid(row=0, column=0, sticky="w")
         self.startup_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        self.startup_checkbutton = ttk.Checkbutton(
             startup_controls,
             text="Start with Windows",
             variable=self.startup_var,
             command=self.change_startup,
-        ).grid(row=0, column=0, sticky="w")
+        )
+        self.startup_checkbutton.grid(row=0, column=0, sticky="w")
         self.startup_status_var = tk.StringVar(value="Not enabled")
         ttk.Label(
             startup_controls,
@@ -686,9 +698,19 @@ class VolumeManagerApp:
         """Apply a persistent rule on the Core Audio callback thread immediately."""
         if self._closing:
             return
-        self.engine.apply_new_session(session, tuple(self.rules))
+        self.engine.apply_new_session(
+            session, tuple(self.rules), temporary_targets=self._live_temporary_targets()
+        )
         # AudioSessionMonitor queues the GUI refresh after this callback returns.
         # COM session objects themselves never cross from the callback thread to Tk.
+
+    def _live_temporary_targets(self) -> dict[tuple[int, str], int]:
+        live = {}
+        for key, target in tuple(self.temporary_process_targets.items()):
+            process = self.temporary_processes.get(key)
+            if process is not None and process.is_running():
+                live[key] = target
+        return live
 
     def _on_table_click(self, event) -> str | None:
         # Treat clicking any cell in a process row as selecting that process,
@@ -852,6 +874,16 @@ class VolumeManagerApp:
         temporary_unique = {
             (row.process_id, row.executable.casefold()): row for row in temporary_rows
         }
+        temporary_processes = {}
+        try:
+            for key in temporary_unique:
+                process = psutil.Process(key[0])
+                if not process.is_running():
+                    raise psutil.NoSuchProcess(key[0])
+                temporary_processes[key] = process
+        except psutil.Error as exc:
+            messagebox.showerror(APP_NAME, f"Could not identify the selected process. Refresh the list and try again.\n\n{exc}")
+            return
         new_rules = sorted(updated.values(), key=lambda rule: (rule.executable.casefold(), rule.key))
 
         if persistent_count:
@@ -878,9 +910,9 @@ class VolumeManagerApp:
             }
         for process_key in temporary_unique:
             self.temporary_process_targets[process_key] = target
+            self.temporary_processes[process_key] = temporary_processes[process_key]
 
         if persistent_count or temporary_unique:
-            self.engine.reset()
             self._scan_sessions(force=True)
         if persistent_count and temporary_unique:
             self.status_var.set(
@@ -906,11 +938,15 @@ class VolumeManagerApp:
             return
 
         rules_to_remove = {row.rule.key: row.rule for row in selected if row.rule is not None}
-        if not rules_to_remove:
-            messagebox.showinfo(APP_NAME, "The selected process(es) have no saved volume rule to remove.")
+        temporary_keys = {
+            (row.process_id, row.executable.casefold()) for row in selected
+            if (row.process_id, row.executable.casefold()) in self.temporary_process_targets
+        }
+        if not rules_to_remove and not temporary_keys:
+            messagebox.showinfo(APP_NAME, "The selected process(es) have no volume rule or temporary target to remove.")
             return
 
-        descriptions = []
+        descriptions = [f"{executable} (PID {pid}) — temporary target" for pid, executable in sorted(temporary_keys)]
         for rule in rules_to_remove.values():
             if rule.is_process_specific:
                 descriptions.append(f"{rule.executable} — matching process profile only")
@@ -918,22 +954,28 @@ class VolumeManagerApp:
                 descriptions.append(f"{rule.executable} — all processes using this app")
         if not messagebox.askyesno(
             APP_NAME,
-            "Remove these saved volume rule(s)?\n\n" + "\n".join(sorted(descriptions, key=str.casefold)),
+            "Remove these volume rules and temporary targets?\n\n" + "\n".join(sorted(descriptions, key=str.casefold)),
         ):
             return
 
         remove_keys = set(rules_to_remove)
         new_rules = [rule for rule in self.rules if rule.key not in remove_keys]
-        try:
-            self.store.save_rules(new_rules)
-        except SettingsError as exc:
-            messagebox.showerror(APP_NAME, str(exc))
-            return
+        if remove_keys:
+            try:
+                self.store.save_rules(new_rules)
+            except SettingsError as exc:
+                messagebox.showerror(APP_NAME, str(exc))
+                return
 
         self.rules = new_rules
-        self.engine.reset()
+        for key in temporary_keys:
+            self.temporary_process_targets.pop(key, None)
+            self.temporary_processes.pop(key, None)
         self._refresh_table()
-        self.status_var.set(f"Removed {len(remove_keys)} saved rule(s). Current volumes are not reset.")
+        self.status_var.set(
+            f"Removed {len(remove_keys)} saved rule(s) and {len(temporary_keys)} temporary target(s). "
+            "Current volumes are not reset."
+        )
 
     def add_rule(self) -> None:
         self._rule_dialog()
@@ -1000,7 +1042,6 @@ class VolumeManagerApp:
                 new_rules.sort(key=lambda rule: rule.executable.casefold())
                 self.store.save_rules(new_rules)
                 self.rules = new_rules
-                self.engine.reset()
                 self._scan_sessions(force=True)
                 self.status_var.set(
                     f"Saved {new_rule.executable}; waiting for its audio session if it isn't active."
@@ -1037,14 +1078,44 @@ class VolumeManagerApp:
         )
 
     def change_startup(self) -> None:
-        requested = bool(self.startup_var.get())
+        self._start_startup_update(bool(self.startup_var.get()))
+
+    def _start_startup_update(self, requested: bool | None) -> None:
+        if self._startup_busy:
+            return
+        self._startup_busy = True
+        self.startup_checkbutton.state(["disabled"])
+        self.startup_status_var.set("Checking…" if requested is None else "Updating…")
+
+        def update() -> None:
+            try:
+                if requested is None:
+                    migrate_startup()
+                    enabled = is_startup_enabled()
+                else:
+                    set_startup_enabled(requested)
+                    enabled = requested
+                self._startup_results.put((enabled, None))
+            except Exception as exc:
+                self._startup_results.put((None, str(exc)))
+
+        threading.Thread(target=update, name="startup-setting", daemon=True).start()
+
+    def _process_startup_results(self) -> None:
         try:
-            set_startup_enabled(requested)
-            self._update_startup_status()
-        except OSError as exc:
-            self.startup_var.set(not requested)
-            self._update_startup_status()
-            messagebox.showerror(APP_NAME, f"Could not update Windows startup setting:\n{exc}")
+            enabled, error = self._startup_results.get_nowait()
+        except queue.Empty:
+            return
+        self._startup_busy = False
+        self.startup_checkbutton.state(["!disabled"])
+        if error is None:
+            self._startup_enabled = enabled
+        self.startup_var.set(self._startup_enabled)
+        self._update_startup_status()
+        if error is not None:
+            self.status_var.set(f"Windows startup setting failed: {error}")
+            if self.window_visible:
+                messagebox.showerror(APP_NAME, f"Could not update Windows startup setting:\n{error}")
 
     def open_settings_folder(self) -> None:
         path = self.store.path.parent
@@ -1055,7 +1126,6 @@ class VolumeManagerApp:
             messagebox.showerror(APP_NAME, f"Could not open settings folder:\n{exc}")
 
     def reapply_now(self) -> None:
-        self.engine.reset()
         self._scan_sessions(force=True)
 
     def _schedule_poll(self, delay_ms: int) -> None:
@@ -1088,6 +1158,11 @@ class VolumeManagerApp:
         self._audio_event_after_id = None
         if self._closing:
             return
+        if hasattr(self, "_startup_results"):
+            self._process_startup_results()
+        instance = getattr(self, "instance_guard", None)
+        if instance is not None and instance.show_requested():
+            self.show_window()
         has_changes = False
         while True:
             try:
@@ -1097,6 +1172,11 @@ class VolumeManagerApp:
                 break
         if has_changes:
             self._scan_sessions(update_table=self.window_visible)
+            ready = bool(
+                self.audio_monitor and self.audio_monitor.is_ready
+                and not self.audio_monitor.last_error
+            )
+            self._schedule_poll(refresh_interval_ms(self.window_visible, ready))
         if not self._closing:
             self._audio_event_after_id = self.root.after(
                 AUDIO_EVENT_CHECK_MS, self._process_audio_events
@@ -1120,14 +1200,10 @@ class VolumeManagerApp:
                 return
         try:
             self.last_sessions = self.backend.get_sessions()
-            live_processes = {
-                (session.process_id, session.executable.casefold())
-                for session in self.last_sessions
-                if session.process_id is not None
-            }
-            self.temporary_process_targets = {
-                key: target for key, target in self.temporary_process_targets.items()
-                if key in live_processes
+            self.temporary_process_targets = self._live_temporary_targets()
+            self.temporary_processes = {
+                key: process for key, process in self.temporary_processes.items()
+                if key in self.temporary_process_targets
             }
             result = self.engine.scan(
                 self.last_sessions,
@@ -1316,11 +1392,18 @@ def main() -> int:
     if sys.platform != "win32":
         print("App Volume Manager is a Windows-only application.", file=sys.stderr)
         return 1
-    set_windows_app_identity()
-    root = tk.Tk()
-    VolumeManagerApp(root, start_minimized=args.minimized)
-    root.mainloop()
-    return 0
+    instance = SingleInstance()
+    try:
+        if not instance.acquire(show_existing=not args.minimized):
+            return 0
+        set_windows_app_identity()
+        root = tk.Tk()
+        app = VolumeManagerApp(root, start_minimized=args.minimized)
+        app.instance_guard = instance
+        root.mainloop()
+        return 0
+    finally:
+        instance.close()
 
 
 if __name__ == "__main__":

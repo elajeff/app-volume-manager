@@ -95,6 +95,19 @@ class AudioBackendTests(unittest.TestCase):
         result[0].set_volume(20)
         self.assertEqual(session.SimpleAudioVolume.set_values, [0.2])
 
+    def test_notification_accepts_pycaw_wrapper_without_querying_it_again(self):
+        # Real Pycaw wrappers have no QueryInterface method.
+        class WrappedSession(_Session):
+            QueryInterface = None
+        session = WrappedSession(pid=123)
+        modules = self.fake_pycaw([], [])
+        modules["pycaw.pycaw"].AudioSession = WrappedSession
+        with patch.dict(sys.modules, modules):
+            result = WindowsAudioBackend().wrap_notified_session(session, "device-1", "Speakers", 0)
+        self.assertIsNotNone(result)
+        result.set_volume(15)
+        self.assertEqual(session.SimpleAudioVolume.set_values, [0.15])
+
     def test_enumerates_sessions_from_all_devices_without_fallback(self):
         session = _Session(pid=555, cmdline=["Discord.exe"])
         class SessionEnumerator:

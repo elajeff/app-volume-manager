@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Iterable
 
-from app_volume_manager.rules import AppRule
+from app_volume_manager.rules import AppRule, resolve_rule
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -59,8 +59,7 @@ def build_process_rows(
         signature = next(iter(signatures)) if len(signatures) == 1 else None
         if signature:
             active_signatures.add(signature)
-        signature_rule = process_rules.get(signature) if signature else None
-        rule = signature_rule or app_rules.get(executable_key)
+        rule = resolve_rule(executable, signature, app_rules, process_rules)
         volumes = tuple(sorted({
             int(item.current_volume)
             for item in grouped

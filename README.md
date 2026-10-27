@@ -6,7 +6,7 @@ I was tired of Discord's volume resetting itself to 100% and jumpscaring me ever
 
 ## Features
 
-- **Event-driven audio monitoring:** registers Windows Core Audio session-created notifications for active playback devices, applies matching rules as sessions appear, and keeps a slower safety scan for hidden mode or notification failures.
+- **Event-driven audio monitoring:** listens for Windows Core Audio session creation, volume changes, and playback-device changes. Applies matching rules as sessions appear and restores their saved volume if another app or the Windows mixer changes it. A slow safety scan covers missed notifications.
 - **Process-aware volume control:** groups sessions by process ID, shows session counts and mixed volume values, and distinguishes separate instances of the same executable.
 - **Persistent targeting rules:** supports executable-wide rules and process-role profiles when stable process details are available. If a process cannot be identified safely for reuse after restart, its selected volume remains temporary for that process instance.
 - **Process search:** filters case-insensitively by executable, PID, audio session/device details, process role, and rule information. Checked processes remain selected while temporarily hidden by a search.
@@ -27,17 +27,21 @@ I was tired of Discord's volume resetting itself to 100% and jumpscaring me ever
 3. Use **Search processes** to narrow the list by app name, PID, session/device, role, or rule details. **Clear** or press **Esc** to remove the filter. Filtering does not clear previously checked processes; the selected count remains visible.
 4. Click a row or its checkbox to select or deselect a process. Set **Volume for selected**, then choose **Apply to selected** to adjust the checked targets.
 5. Choose **Add rule for app…** to save a rule for all processes with one executable name. Process-role rules are created when the app can safely distinguish a matching process profile; ambiguous targets remain temporary rather than being persisted too broadly.
-6. Use **Remove selected** to remove saved rules associated with checked rows. It does not reset the current Windows audio volume.
+6. Use **Remove selected** to remove saved rules and temporary targets associated with checked rows. It does not reset the current Windows audio volume.
 7. Use **Slider color…** to preview a color. Move over the palette or hue strip to preview; click to hold a selected point while moving to the dialog buttons. Enter RGB channel values (`0`–`255`) or a `#RRGGBB` HEX value directly. **Reset to default** previews blue; choose **Save color** to persist it, or **Cancel** to restore the original color.
-8. Choose **Light** or **Dark** from the Appearance menu. Enable **Start with Windows** to launch at sign-in. Closing the window normally hides it in the system tray; select **Exit** from the tray menu to stop the app.
+8. Choose **Light** or **Dark** from the Appearance menu. Enable **Start with Windows** to launch through a per-user sign-in task with no configured delay. Existing enabled registry startup entries are migrated when this version runs. Closing the window normally hides it in the system tray; select **Exit** from the tray menu to stop the app.
 
 ## How rules and monitoring work
 
 An app-wide rule affects all audio sessions whose executable matches. A process-role profile is more specific and takes precedence when it matches. If stable process details are unavailable, a checked process can receive a temporary PID-scoped target for the current run instead of creating a persistent rule that might affect the wrong process later.
 
-When the window is visible, the process table refreshes every two seconds. In the system tray, the app listens for Core Audio notifications and uses a slow safety scan. If notification registration is unavailable, it falls back to a five-second scan. Saved rules do not continuously overwrite manual volume changes; the engine tracks its last applied target and reapplies only when needed, unless **Reapply saved volumes** is requested.
+When the window is visible, the process table refreshes every two seconds. In the system tray, the app listens for Core Audio notifications and uses a slow safety scan. If notification registration is unavailable, it falls back to a five-second scan. Enabled rules enforce their configured volume. Changes made by an application or the Windows volume mixer are restored after a volume-change notification; scans also correct mismatches. Matching volumes are left alone. To change the target, use this app; to stop enforcing it, remove or disable the saved rule. Temporary process targets survive audio-session gaps and output-device changes while the same process is running. They expire when that process exits or the manager restarts, and **Remove selected** can cancel them.
+
+At launch, saved volumes are applied before the interface and tray are built. Only one copy runs per Windows session; opening another copy brings up the existing window. Startup checks and changes run in the background with a 20-second limit per Windows command; the checkbox shows Checking or Updating until they finish. Startup warnings do not block a hidden launch and are shown in the app status. The sign-in task runs as the current user, without elevation, including on battery power. It improves launch timing but cannot guarantee starting before Discord or another sign-in application.
 
 Windows only exposes controllable per-application volume after an audio session exists, so no user-space utility can guarantee changing an app's volume before its very first audio sample. If two sounds share the same Windows audio session, they cannot be controlled separately. Exclusive-mode audio and unusual device routing may also limit session control.
+
+If saved rules cannot be loaded, the original file is preserved and rule saving is blocked. Repair or rename `%LOCALAPPDATA%\AppVolumeManager\settings.json`, then restart the app before saving new rules.
 
 ## Run tests
 
@@ -68,7 +72,8 @@ Keep the full **App Volume Manager** folder together when distributing it manual
 - `app_volume_manager/process_list.py` — combines active sessions and saved rules into process rows.
 - `app_volume_manager/volume_service.py` — applies persistent rules and temporary process-instance targets.
 - `app_volume_manager/rules.py` and `settings.py` — rule validation, preference migration, and atomic JSON storage.
-- `app_volume_manager/startup.py` — Windows sign-in startup option.
+- `app_volume_manager/startup.py` — per-user sign-in task and legacy startup migration.
+- `app_volume_manager/single_instance.py` — prevents competing copies and opens the existing window.
 - `assets/` — window, taskbar, tray, and executable icons; `tests/` — automated regression suite.
 
 The app does not require administrator privileges. It controls per-application audio sessions, not Windows master volume.

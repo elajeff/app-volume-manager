@@ -29,21 +29,12 @@ if not exist ".venv\Scripts\python.exe" (
     if errorlevel 1 goto :failed
 )
 
-rem Re-check imports so updates can add a dependency without requiring users to
-rem delete their existing virtual environment. A stamp alone can become stale.
-if exist ".venv\.requirements-installed" (
-    ".venv\Scripts\python.exe" -c "import comtypes, pycaw, pystray, PIL, psutil" >nul 2>&1
-    if not errorlevel 1 goto :requirements_ready
-)
-
-echo Installing or updating App Volume Manager dependencies...
-".venv\Scripts\python.exe" -m pip install --upgrade pip
+rem pip leaves compatible installed versions alone and installs only missing or
+rem incompatible requirements. This also handles updates to requirements.txt.
+echo Checking App Volume Manager dependencies...
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 goto :failed
-".venv\Scripts\python.exe" -m pip install -r requirements.txt
-if errorlevel 1 goto :failed
-echo installed>".venv\.requirements-installed"
 
-:requirements_ready
 if not exist ".venv\Scripts\pythonw.exe" (
     echo pythonw.exe was not found in the virtual environment. Try run-console.bat for details.
     goto :failed
