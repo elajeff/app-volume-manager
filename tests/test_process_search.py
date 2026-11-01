@@ -37,7 +37,6 @@ class ProcessSearchTests(unittest.TestCase):
         self.app.checked_rows = set()
         self.app._row_info = {}
         self.app._all_row_info = {}
-        self.app._shown_rows = {}
         self.app.temporary = TemporaryTargets()
         self.app.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
         self.app._apply_theme("light")
@@ -85,7 +84,7 @@ class ProcessSearchTests(unittest.TestCase):
             )
 
     def test_vertical_scrollbar_appears_only_when_the_list_overflows(self):
-        self.assertFalse(self.app.vertical_scrollbar.winfo_ismapped())
+        self.assertFalse(self.app.process_table.vertical_scrollbar.winfo_ismapped())
         self.app.last_sessions = [
             AudioSession(
                 f"app{index}.exe", f"session-{index}", lambda _value: None,
@@ -97,7 +96,7 @@ class ProcessSearchTests(unittest.TestCase):
         self.app._refresh_table()
         self.root.update_idletasks()
         self.root.update()
-        self.assertTrue(self.app.vertical_scrollbar.winfo_ismapped())
+        self.assertTrue(self.app.process_table.vertical_scrollbar.winfo_ismapped())
 
 
     def discord_row_id(self):

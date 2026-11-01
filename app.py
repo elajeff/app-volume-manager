@@ -29,6 +29,7 @@ from app_volume_manager.settings import PreferenceStore, SettingsError, Settings
 from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
 from app_volume_manager.ui import APP_NAME
+from app_volume_manager.ui.process_table import ProcessTable
 from app_volume_manager.ui.rule_dialog import show_rule_dialog
 from app_volume_manager.ui.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.ui.theme import PALETTES, apply_base_theme, configure_scrollbars, configure_volume_slider
@@ -74,7 +75,6 @@ class VolumeManagerApp:
         self.checked_rows: set[str] = set()
         self._row_info: dict[str, ProcessRow] = {}
         self._all_row_info: dict[str, ProcessRow] = {}
-        self._shown_rows: dict[str, tuple] = {}
         # Temporary PID-scoped targets are used only when Windows doesn't expose
         # enough stable role information to create a safe persistent profile.
         self.temporary = TemporaryTargets()
@@ -261,54 +261,10 @@ class VolumeManagerApp:
         ).grid(row=0, column=3, sticky="e")
         self.search_var.trace_add("write", lambda *_args: self._refresh_table())
 
-        # Parent the Treeview to table_frame itself; parenting it to `outer` and
-        # packing it in with in_= left it covered on Windows (a blank table).
-        self.table_frame = ttk.Frame(outer)
-        self.table_frame.grid(row=3, column=0, sticky="nsew")
-
-        columns = ("checked", "application", "pid", "sessions", "details", "current", "target", "status")
-        self.table = ttk.Treeview(
-            self.table_frame, columns=columns, show="headings", height=7, selectmode="browse"
-        )
-        for column, title in (
-            ("checked", "Select"),
-            ("application", "Process"),
-            ("pid", "PID"),
-            ("sessions", "Sessions"),
-            ("details", "Session / device"),
-            ("current", "Current"),
-            ("target", "Target"),
-            ("status", "Rule status"),
-        ):
-            self.table.heading(column, text=title)
-        self.table.column("checked", width=60, minwidth=60, anchor="center", stretch=False)
-        self.table.column("application", width=140, minwidth=110, stretch=False)
-        self.table.column("pid", width=60, minwidth=60, anchor="center", stretch=False)
-        self.table.column("sessions", width=80, minwidth=80, anchor="center", stretch=False)
-        self.table.column("details", width=170, minwidth=130, stretch=False)
-        self.table.column("current", width=84, minwidth=84, anchor="center", stretch=False)
-        self.table.column("target", width=84, minwidth=84, anchor="center", stretch=False)
-        self.table.column("status", width=150, minwidth=120, stretch=False)
-        self.table.bind("<Button-1>", self._on_table_click)
-        self.table.bind("<Configure>", self._on_table_resize, add="+")
-
-        self.vertical_scrollbar = ttk.Scrollbar(
-            self.table_frame, orient="vertical", command=self.table.yview,
-            style="App.Vertical.TScrollbar",
-        )
-        self.horizontal_scrollbar = ttk.Scrollbar(
-            self.table_frame, orient="horizontal", command=self.table.xview,
-            style="App.Horizontal.TScrollbar",
-        )
-        self.table.configure(
-            yscrollcommand=self._set_vertical_scrollbar,
-            xscrollcommand=self.horizontal_scrollbar.set,
-        )
-        self.table.grid(row=0, column=0, sticky="nsew")
-        self.vertical_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
-        self.table_frame.grid_rowconfigure(0, weight=1)
-        self.table_frame.grid_columnconfigure(0, weight=1)
+        self.process_table = ProcessTable(outer, self._on_table_click)
+        self.process_table.frame.grid(row=3, column=0, sticky="nsew")
+        self.table = self.process_table.tree
+        self.table_frame = self.process_table.frame
 
         volume_frame = ttk.Frame(outer)
         volume_frame.grid(row=4, column=0, sticky="ew", pady=(10, 4))
@@ -386,55 +342,7 @@ class VolumeManagerApp:
         )
         self.root.bind("<Configure>", self._on_root_resize, add="+")
         self._refresh_table()
-        self.root.after_idle(self._on_table_resize)
-
-    def _set_vertical_scrollbar(self, first: str, last: str) -> None:
-        """Show the colored process scrollbar only when the table can scroll."""
-        self.vertical_scrollbar.set(first, last)
-        if float(first) <= 0.0 and float(last) >= 1.0:
-            self.vertical_scrollbar.grid_remove()
-        else:
-            self.vertical_scrollbar.grid(row=0, column=1, sticky="ns")
-
-    def _on_table_resize(self, event=None) -> None:
-        """Fit the process columns to the current width, scrolling only if needed."""
-        if event is not None and event.widget is not self.table:
-            return
-        available = self.table.winfo_width() - 4
-        if available < 100:
-            return  # Geometry is not settled yet; the next Configure event retries.
-
-        fixed_widths = {
-            "checked": 60,
-            "pid": 60,
-            "sessions": 80,
-            "current": 84,
-            "target": 84,
-        }
-        flexible_minimums = {"application": 110, "details": 130, "status": 120}
-        minimum_total = sum(fixed_widths.values()) + sum(flexible_minimums.values())
-        if available >= minimum_total:
-            remaining = available - minimum_total
-            weights = {"application": 1.0, "details": 1.5, "status": 1.1}
-            total_weight = sum(weights.values())
-            widths = dict(fixed_widths)
-            allocated = 0
-            for column in ("application", "details"):
-                extra = int(remaining * weights[column] / total_weight)
-                widths[column] = flexible_minimums[column] + extra
-                allocated += extra
-            widths["status"] = (
-                flexible_minimums["status"] + remaining - allocated
-            )
-            for column, width in widths.items():
-                self.table.column(column, width=width, stretch=False)
-            self.horizontal_scrollbar.grid_remove()
-        else:
-            # Preserve readable minimums on unusually narrow displays and let
-            # the user reach the remaining columns with the horizontal scrollbar.
-            for column, width in {**fixed_widths, **flexible_minimums}.items():
-                self.table.column(column, width=width, stretch=False)
-            self.horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
+        self.root.after_idle(self.process_table.fit_columns)
 
     def _on_root_resize(self, event) -> None:
         """Adapt the status line to the available footer width during resizing."""
@@ -857,20 +765,7 @@ class VolumeManagerApp:
                 "Play sound in an app, then refresh",
             )}
 
-        if list(shown) == list(self._shown_rows):
-            # Same rows in the same order: touch only the cells that changed.
-            for row_id, values in shown.items():
-                if values != self._shown_rows[row_id]:
-                    self.table.item(row_id, values=values)
-        else:
-            previous_selection = self.table.selection()
-            self.table.delete(*self.table.get_children())
-            for row_id, values in shown.items():
-                self.table.insert("", "end", iid=row_id, values=values)
-            if previous_selection and previous_selection[0] in self._row_info:
-                self.table.selection_set(previous_selection[0])
-                self.table.focus(previous_selection[0])
-        self._shown_rows = shown
+        self.process_table.show(shown, self._row_info)
         self._sync_volume_scale_enabled()
 
     def _sync_volume_scale_enabled(self) -> None:

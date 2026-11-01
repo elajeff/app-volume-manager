@@ -35,7 +35,6 @@ class ProcessTableLayoutTests(unittest.TestCase):
         app.checked_rows = set()
         app._row_info = {}
         app._all_row_info = {}
-        app._shown_rows = {}
         app.temporary = TemporaryTargets()
         app.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
 
