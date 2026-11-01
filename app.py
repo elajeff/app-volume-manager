@@ -20,9 +20,9 @@ from app_volume_manager.color_utils import normalize_hex_color
 from app_volume_manager.process_list import ProcessRow, build_process_rows
 from app_volume_manager.rules import AppRule
 from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore, default_settings_path
+from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
-from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.volume_service import VolumeRuleEngine
 
 APP_NAME = "App Volume Manager"
@@ -843,7 +843,10 @@ class VolumeManagerApp:
                     raise psutil.NoSuchProcess(key[0])
                 temporary_processes[key] = process
         except psutil.Error as exc:
-            messagebox.showerror(APP_NAME, f"Could not identify the selected process. Refresh the list and try again.\n\n{exc}")
+            messagebox.showerror(
+                APP_NAME,
+                f"Could not identify the selected process. Refresh the list and try again.\n\n{exc}",
+            )
             return
         new_rules = sorted(updated.values(), key=lambda rule: (rule.executable.casefold(), rule.key))
 

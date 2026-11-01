@@ -32,7 +32,8 @@ class WindowsIntegrationTests(unittest.TestCase):
         # The task is never run. Use the current interpreter to validate quoting
         # and scheduler registration without depending on the repository path.
         with patch.object(startup, "_task_name", return_value=name), \
-             patch.object(startup, "_startup_parts", return_value=(str(executable), "--version", str(executable.parent))), \
+             patch.object(startup, "_startup_parts",
+                          return_value=(str(executable), "--version", str(executable.parent))), \
              patch.object(startup, "_remove_legacy"), \
              patch.object(startup, "_legacy_enabled", return_value=False):
             try:

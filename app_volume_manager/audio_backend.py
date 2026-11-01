@@ -129,7 +129,8 @@ class WindowsAudioBackend:
         handed across apartments before its saved volume rule is applied.
         """
         try:
-            from pycaw.pycaw import AudioSession as PycawAudioSession, IAudioSessionControl2
+            from pycaw.pycaw import AudioSession as PycawAudioSession
+            from pycaw.pycaw import IAudioSessionControl2
 
             # Pycaw's notification class already wraps OnSessionCreated's COM
             # argument. Enumeration callers may still supply the raw interface.
@@ -193,7 +194,8 @@ class WindowsAudioBackend:
 
         try:
             from pycaw.constants import DEVICE_STATE, EDataFlow
-            from pycaw.pycaw import AudioSession as PycawAudioSession, AudioUtilities, IAudioSessionControl2
+            from pycaw.pycaw import AudioSession as PycawAudioSession
+            from pycaw.pycaw import AudioUtilities, IAudioSessionControl2
         except ImportError as exc:
             raise AudioBackendError(
                 "The audio dependencies are missing. Run run.bat to install requirements.txt."

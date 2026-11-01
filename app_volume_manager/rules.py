@@ -1,7 +1,7 @@
 """Validated volume rules for an app or a repeatable process role."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 def normalize_executable_name(value: str) -> str:

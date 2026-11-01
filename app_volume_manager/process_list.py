@@ -1,7 +1,7 @@
 """Build process-instance rows from live Windows audio sessions and saved rules."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from app_volume_manager.rules import AppRule, resolve_rule, split_rules
 from app_volume_manager.volume_service import AudioSession

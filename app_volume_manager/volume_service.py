@@ -1,7 +1,7 @@
 """Testable audio-session models and volume-rule application logic."""
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable
 
 from app_volume_manager.rules import AppRule, normalize_executable_name, resolve_rule, split_rules
 

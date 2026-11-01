@@ -4,7 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app_volume_manager.audio_monitor import (
-    DEVICES_CHANGED, SESSIONS_CHANGED, AudioSessionMonitor, refresh_interval_ms,
+    DEVICES_CHANGED,
+    SESSIONS_CHANGED,
+    AudioSessionMonitor,
+    refresh_interval_ms,
 )
 from app_volume_manager.volume_service import AudioSession
 

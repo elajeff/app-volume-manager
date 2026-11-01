@@ -12,7 +12,13 @@ class LoggingTests(unittest.TestCase):
         root = logging.getLogger()
         saved_handlers, saved_level = root.handlers[:], root.level
         root.handlers.clear()
-        self.addCleanup(lambda: (root.handlers.clear(), root.handlers.extend(saved_handlers), root.setLevel(saved_level)))
+
+        def restore():
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+        self.addCleanup(restore)
         with tempfile.TemporaryDirectory() as folder:
             with patch.object(app, "default_settings_path", return_value=Path(folder) / "sub" / "settings.json"):
                 app.configure_logging()

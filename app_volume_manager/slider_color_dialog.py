@@ -2,11 +2,14 @@
 
 import colorsys
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
-from typing import Callable
 
 from app_volume_manager.color_utils import (
-    hex_to_rgb, hsv_to_hex, normalize_hex_color, rgb_to_hex,
+    hex_to_rgb,
+    hsv_to_hex,
+    normalize_hex_color,
+    rgb_to_hex,
 )
 from app_volume_manager.settings import PreferenceStore, SettingsError
 
@@ -40,7 +43,10 @@ def show_slider_color_dialog(
     frame.pack(fill="both", expand=True)
     ttk.Label(
         frame,
-        text="Hover to preview. Click a point to keep its color while moving away; leave and re-enter to preview again. Drag to adjust continuously.",
+        text=(
+            "Hover to preview. Click a point to keep its color while moving away; "
+            "leave and re-enter to preview again. Drag to adjust continuously."
+        ),
         wraplength=430,
     ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
@@ -63,7 +69,7 @@ def show_slider_color_dialog(
         row=0, column=0, columnspan=2, sticky="w", pady=(0, 4)
     )
     rgb_vars = [tk.StringVar(value=str(channel)) for channel in current_rgb]
-    for row_index, (label, variable) in enumerate(zip(("Red", "Green", "Blue"), rgb_vars), start=1):
+    for row_index, (label, variable) in enumerate(zip(("Red", "Green", "Blue"), rgb_vars, strict=True), start=1):
         ttk.Label(fields_frame, text=label).grid(row=row_index, column=0, sticky="w", padx=(0, 8))
         entry = ttk.Entry(fields_frame, textvariable=variable, width=6, justify="right")
         entry.grid(row=row_index, column=1, sticky="ew", pady=2)
@@ -180,7 +186,7 @@ def show_slider_color_dialog(
         syncing_fields = True
         try:
             if fields in {"all", "rgb"}:
-                for variable, channel in zip(rgb_vars, (red, green, blue)):
+                for variable, channel in zip(rgb_vars, (red, green, blue), strict=True):
                     variable.set(str(channel))
             if fields in {"all", "hex"}:
                 hex_var.set(current_color)

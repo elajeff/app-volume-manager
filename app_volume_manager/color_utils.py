@@ -2,6 +2,7 @@
 
 import colorsys
 
+
 def normalize_hex_color(value: str) -> str:
     """Return a normalized #RRGGBB color or raise ValueError."""
     if not isinstance(value, str):
