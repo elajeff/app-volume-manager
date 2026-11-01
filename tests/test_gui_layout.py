@@ -4,6 +4,7 @@ import tkinter as tk
 import unittest
 
 from app import DEFAULT_SLIDER_THUMB_COLOR, VolumeManagerApp
+from app_volume_manager.selection import TemporaryTargets
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -35,7 +36,7 @@ class ProcessTableLayoutTests(unittest.TestCase):
         app._row_info = {}
         app._all_row_info = {}
         app._shown_rows = {}
-        app.temporary_process_targets = {}
+        app.temporary = TemporaryTargets()
         app.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
 
         try:

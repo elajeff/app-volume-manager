@@ -73,7 +73,8 @@ Keep the full **App Volume Manager** folder together when distributing it manual
 - `app_volume_manager/audio_backend.py` — Windows audio-session discovery and volume control through Pycaw.
 - `app_volume_manager/audio_monitor.py` — Core Audio session-created notifications, device registration, and retry behavior.
 - `app_volume_manager/process_identity.py` — identifies reusable process profiles from stable command-line details.
-- `app_volume_manager/process_list.py` — combines active sessions and saved rules into process rows.
+- `app_volume_manager/process_list.py` — combines active sessions and saved rules into process rows, with their search matching and table text.
+- `app_volume_manager/selection.py` — decides which rules and temporary targets applying or removing a volume creates.
 - `app_volume_manager/volume_service.py` — applies persistent rules and temporary process-instance targets.
 - `app_volume_manager/rules.py` and `settings.py` — rule validation, preference migration, and atomic JSON storage.
 - `app_volume_manager/startup.py` — per-user sign-in task and legacy startup migration.

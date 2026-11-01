@@ -17,8 +17,15 @@ import psutil
 from app_volume_manager.audio_backend import AudioBackendError, WindowsAudioBackend
 from app_volume_manager.audio_monitor import DEVICES_CHANGED, AudioSessionMonitor, refresh_interval_ms
 from app_volume_manager.color_utils import normalize_hex_color
-from app_volume_manager.process_list import ProcessRow, build_process_rows
+from app_volume_manager.process_list import ProcessRow, build_process_rows, row_matches_search, row_values
 from app_volume_manager.rules import AppRule
+from app_volume_manager.selection import (
+    TemporaryTargets,
+    identify_processes,
+    plan_apply,
+    plan_removal,
+    target_key,
+)
 from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore, default_settings_path
 from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
@@ -117,8 +124,7 @@ class VolumeManagerApp:
         self._shown_rows: dict[str, tuple] = {}
         # Temporary PID-scoped targets are used only when Windows doesn't expose
         # enough stable role information to create a safe persistent profile.
-        self.temporary_process_targets: dict[tuple[int, str], int] = {}
-        self.temporary_processes: dict[tuple[int, str], psutil.Process] = {}
+        self.temporary = TemporaryTargets()
         self.tray_icon = None
         self._closing = False
         self.audio_ready = False
@@ -671,18 +677,10 @@ class VolumeManagerApp:
         if self._closing:
             return
         self.engine.apply_new_session(
-            session, tuple(self.rules), temporary_targets=self._live_temporary_targets()
+            session, tuple(self.rules), temporary_targets=self.temporary.live()
         )
         # AudioSessionMonitor queues the GUI refresh after this callback returns.
         # COM session objects themselves never cross from the callback thread to Tk.
-
-    def _live_temporary_targets(self) -> dict[tuple[int, str], int]:
-        live = {}
-        for key, target in tuple(self.temporary_process_targets.items()):
-            process = self.temporary_processes.get(key)
-            if process is not None and process.is_running():
-                live[key] = target
-        return live
 
     def _on_table_click(self, event) -> str | None:
         # Treat clicking any cell in a process row as selecting that process,
@@ -709,31 +707,6 @@ class VolumeManagerApp:
         self.search_entry.focus_set()
         return "break"
 
-    @staticmethod
-    def _row_matches_search(row: ProcessRow, query: str) -> bool:
-        """Case-insensitively match each search term against process details."""
-        terms = query.casefold().split()
-        if not terms:
-            return True
-
-        searchable_fields = [
-            row.executable,
-            row.process_role,
-            "active" if row.active else "waiting",
-            str(row.process_id) if row.process_id is not None else "",
-            str(row.session_count),
-            *(str(volume) for volume in row.current_volumes),
-            *row.session_details,
-        ]
-        if row.rule is not None:
-            searchable_fields.extend((
-                str(row.rule.volume),
-                "enabled" if row.rule.enabled else "disabled",
-                "process profile" if row.rule.is_process_specific else "app rule",
-            ))
-        searchable_text = " ".join(searchable_fields).casefold()
-        return all(term in searchable_text for term in terms)
-
     def _update_target_label(self, value: str) -> None:
         self.target_volume_label.set(f"Volume for selected: {percent(value)}%")
 
@@ -756,141 +729,56 @@ class VolumeManagerApp:
             return
 
         target = percent(self.target_volume_var.get())
-        updated = {rule.key: rule for rule in self.rules}
-        persistent_count = 0
-        temporary_rows: list[ProcessRow] = []
-        active_rows = [row for row in selected if row.active and row.process_id is not None]
-        saved_rows = [row for row in selected if not row.active and row.rule is not None]
 
-        # Editing a saved row preserves whether its rule targets the whole app
-        # or a repeatable process profile.
-        for row in saved_rows:
-            old_rule = row.rule
-            updated[old_rule.key] = AppRule(
-                old_rule.executable,
-                target,
-                old_rule.enabled,
-                process_signature=old_rule.process_signature,
-                process_role=old_rule.process_role,
+        def confirm_profile(row: ProcessRow, matching_count: int) -> bool:
+            return messagebox.askyesno(
+                APP_NAME,
+                f"{row.executable} has {matching_count} running processes with the same profile. "
+                "Saving this rule will affect all of them, including unchecked processes, "
+                "and matching processes started later.\n\n"
+                "Yes: save for this profile.\n"
+                "No: apply only to checked processes until they exit.",
             )
-            persistent_count += 1
 
-        all_rows = self._all_row_info
-        live_rows = [
-            row for row in all_rows.values()
-            if row.active and row.process_id is not None
-        ]
-        active_signature_counts: dict[str, int] = {}
-        for row in live_rows:
-            if row.process_signature:
-                signature = row.process_signature
-                active_signature_counts[signature] = active_signature_counts.get(signature, 0) + 1
-
-        selected_signature_counts: dict[str, int] = {}
-        for row in active_rows:
-            if row.process_signature:
-                signature = row.process_signature
-                selected_signature_counts[signature] = selected_signature_counts.get(signature, 0) + 1
-
-        handled_signatures: set[str] = set()
-        for row in active_rows:
-            signature = row.process_signature
-            if not signature:
-                temporary_rows.append(row)
-                continue
-            if signature in handled_signatures:
-                continue
-            handled_signatures.add(signature)
-
-            matching_count = active_signature_counts.get(signature, 0)
-            selected_count = selected_signature_counts.get(signature, 0)
-            save_for_role = selected_count >= matching_count
-            if selected_count < matching_count:
-                save_for_role = messagebox.askyesno(
-                    APP_NAME,
-                    f"{row.executable} has {matching_count} running processes with the same profile. "
-                    "Saving this rule will affect all of them, including unchecked processes, "
-                    "and matching processes started later.\n\n"
-                    "Yes: save for this profile.\n"
-                    "No: apply only to checked processes until they exit.",
-                )
-
-            if save_for_role:
-                profile_rule = AppRule(
-                    row.executable,
-                    target,
-                    True,
-                    process_signature=signature,
-                    process_role=row.process_role,
-                )
-                updated[profile_rule.key] = profile_rule
-                persistent_count += 1
-            else:
-                temporary_rows.extend(
-                    candidate for candidate in active_rows if candidate.process_signature == signature
-                )
-
-        # De-duplicate temporary rows, since a selected set can include multiple
-        # representations of the same process only when data from devices overlaps.
-        temporary_unique = {
-            (row.process_id, row.executable.casefold()): row for row in temporary_rows
-        }
-        temporary_processes = {}
+        plan = plan_apply(selected, self._all_row_info, self.rules, target, confirm_profile)
         try:
-            for key in temporary_unique:
-                process = psutil.Process(key[0])
-                if not process.is_running():
-                    raise psutil.NoSuchProcess(key[0])
-                temporary_processes[key] = process
+            processes = identify_processes(plan.temporary_keys)
         except psutil.Error as exc:
             messagebox.showerror(
                 APP_NAME,
                 f"Could not identify the selected process. Refresh the list and try again.\n\n{exc}",
             )
             return
-        new_rules = sorted(updated.values(), key=lambda rule: (rule.executable.casefold(), rule.key))
 
+        persistent_count = plan.persistent_count
+        temporary_count = len(plan.temporary_keys)
         if persistent_count:
             try:
-                self.store.save_rules(new_rules)
+                self.store.save_rules(plan.rules)
             except SettingsError as exc:
                 messagebox.showerror(APP_NAME, str(exc))
                 return
-            self.rules = new_rules
+            self.rules = plan.rules
 
-        persistent_signatures = {
-            rule.process_signature for rule in updated.values()
-            if rule.is_process_specific and rule.process_signature is not None
-        }
-        if persistent_signatures:
-            self.temporary_process_targets = {
-                key: value for key, value in self.temporary_process_targets.items()
-                if not any(
-                    row.process_id == key[0]
-                    and row.executable.casefold() == key[1]
-                    and row.process_signature in persistent_signatures
-                    for row in all_rows.values()
-                )
-            }
-        for process_key in temporary_unique:
-            self.temporary_process_targets[process_key] = target
-            self.temporary_processes[process_key] = temporary_processes[process_key]
+        self.temporary.discard(plan.superseded_keys)
+        for key, process in processes.items():
+            self.temporary.add(key, target, process)
 
-        if persistent_count or temporary_unique:
+        if persistent_count or temporary_count:
             self._scan_sessions(force=True)
-        if persistent_count and temporary_unique:
+        if persistent_count and temporary_count:
             self.status_var.set(
                 f"Saved {persistent_count} rule(s); applied temporarily to "
-                f"{len(temporary_unique)} selected process instance(s) that can't be matched safely after restart."
+                f"{temporary_count} selected process instance(s) that can't be matched safely after restart."
             )
         elif persistent_count:
             self.status_var.set(
                 f"Saved {persistent_count} rule(s). Process profiles match the same executable profile "
                 "after restart; app rules affect every matching process."
             )
-        elif temporary_unique:
+        elif temporary_count:
             self.status_var.set(
-                f"Applied {target}% to {len(temporary_unique)} checked process instance(s) for this run only. "
+                f"Applied {target}% to {temporary_count} checked process instance(s) for this run only. "
                 "Use Add rule for app for a persistent rule when a process profile can't be identified."
             )
         self._refresh_table()
@@ -901,28 +789,17 @@ class VolumeManagerApp:
             messagebox.showinfo(APP_NAME, "Tick one or more rows in the Select column first.")
             return
 
-        rules_to_remove = {row.rule.key: row.rule for row in selected if row.rule is not None}
-        temporary_keys = {
-            (row.process_id, row.executable.casefold()) for row in selected
-            if (row.process_id, row.executable.casefold()) in self.temporary_process_targets
-        }
-        if not rules_to_remove and not temporary_keys:
+        plan = plan_removal(selected, self.temporary)
+        if plan.is_empty:
             messagebox.showinfo(APP_NAME, "The selected process(es) have no volume rule or temporary target to remove.")
             return
-
-        descriptions = [f"{executable} (PID {pid}) — temporary target" for pid, executable in sorted(temporary_keys)]
-        for rule in rules_to_remove.values():
-            if rule.is_process_specific:
-                descriptions.append(f"{rule.executable} — matching process profile only")
-            else:
-                descriptions.append(f"{rule.executable} — all processes using this app")
         if not messagebox.askyesno(
             APP_NAME,
-            "Remove these volume rules and temporary targets?\n\n" + "\n".join(sorted(descriptions, key=str.casefold)),
+            "Remove these volume rules and temporary targets?\n\n" + "\n".join(plan.descriptions()),
         ):
             return
 
-        remove_keys = set(rules_to_remove)
+        remove_keys = {rule.key for rule in plan.rules}
         new_rules = [rule for rule in self.rules if rule.key not in remove_keys]
         if remove_keys:
             try:
@@ -932,12 +809,10 @@ class VolumeManagerApp:
                 return
 
         self.rules = new_rules
-        for key in temporary_keys:
-            self.temporary_process_targets.pop(key, None)
-            self.temporary_processes.pop(key, None)
+        self.temporary.discard(plan.temporary_keys)
         self._refresh_table()
         self.status_var.set(
-            f"Removed {len(remove_keys)} saved rule(s) and {len(temporary_keys)} temporary target(s). "
+            f"Removed {len(remove_keys)} saved rule(s) and {len(plan.temporary_keys)} temporary target(s). "
             "Current volumes are not reset."
         )
 
@@ -1162,16 +1037,11 @@ class VolumeManagerApp:
                 return
         try:
             self.last_sessions = self.backend.get_sessions()
-            self.temporary_process_targets = self._live_temporary_targets()
-            self.temporary_processes = {
-                key: process for key, process in self.temporary_processes.items()
-                if key in self.temporary_process_targets
-            }
             result = self.engine.scan(
                 self.last_sessions,
                 self.rules,
                 force=force,
-                temporary_targets=self.temporary_process_targets,
+                temporary_targets=self.temporary.prune(),
             )
             process_count = len({
                 (session.executable.casefold(), session.process_id)
@@ -1204,51 +1074,9 @@ class VolumeManagerApp:
         if update_table:
             self._refresh_table()
 
-    def _table_values(self, row: ProcessRow) -> tuple:
-        if row.current_volumes:
-            current_volume = (
-                f"{row.current_volumes[0]}%"
-                if len(row.current_volumes) == 1
-                else "Mixed"
-            )
-        else:
-            current_volume = "—"
-        temporary_target = None
-        if row.active and row.process_id is not None:
-            temporary_target = self.temporary_process_targets.get(
-                (row.process_id, row.executable.casefold())
-            )
-        target = (
-            f"{temporary_target}%" if temporary_target is not None
-            else f"{row.rule.volume}%" if row.rule is not None
-            else "—"
-        )
-        if not row.active:
-            if row.rule and not row.rule.enabled:
-                status = "Saved rule disabled"
-            elif row.rule and row.rule.is_process_specific:
-                status = "Waiting for matching profile"
-            else:
-                status = "Waiting for app audio"
-            process_id = "—"
-            session_count = "0"
-        else:
-            process_id = str(row.process_id) if row.process_id is not None else "Unknown"
-            session_count = str(row.session_count)
-            if temporary_target is not None:
-                status = "Temporary process target"
-            elif row.rule is None:
-                status = "Not configured"
-            elif not row.rule.enabled:
-                status = "Rule disabled"
-            elif row.rule.is_process_specific:
-                status = "Saved process profile"
-            else:
-                status = "App rule"
-        checked = "☑" if row.row_id in self.checked_rows else "☐"
-        details = "; ".join(row.session_details) or "—"
-        return (checked, row.executable, process_id, session_count, details,
-                current_volume, target, status)
+    def _row_values(self, row: ProcessRow) -> tuple[str, ...]:
+        temporary_target = self.temporary.get(target_key(row)) if row.active and row.process_id is not None else None
+        return row_values(row, row.row_id in self.checked_rows, temporary_target)
 
     def _refresh_table(self) -> None:
         all_rows = build_process_rows(self.last_sessions, self.rules)
@@ -1256,12 +1084,12 @@ class VolumeManagerApp:
         # Filtering changes only which rows are drawn. Checked processes stay
         # checked while hidden by a query, and can still be acted on safely.
         self.checked_rows.intersection_update(self._all_row_info)
-        rows = [row for row in all_rows if self._row_matches_search(row, self.search_var.get().strip())]
+        rows = [row for row in all_rows if row_matches_search(row, self.search_var.get().strip())]
         self._row_info = {row.row_id: row for row in rows}
         self.search_summary_var.set(f"{len(rows)} shown  ·  {len(self.checked_rows)} selected")
 
         if rows:
-            shown = {row.row_id: self._table_values(row) for row in rows}
+            shown = {row.row_id: self._row_values(row) for row in rows}
         elif all_rows:
             shown = {"no-search-matches": (
                 "—", "No matching processes", "—", "—", "—", "—", "—",

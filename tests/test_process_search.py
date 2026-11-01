@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import DEFAULT_SLIDER_THUMB_COLOR, VolumeManagerApp
+from app_volume_manager.selection import TemporaryTargets
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -37,7 +38,7 @@ class ProcessSearchTests(unittest.TestCase):
         self.app._row_info = {}
         self.app._all_row_info = {}
         self.app._shown_rows = {}
-        self.app.temporary_process_targets = {}
+        self.app.temporary = TemporaryTargets()
         self.app.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
         self.app._apply_theme("light")
         self.app._build_ui()

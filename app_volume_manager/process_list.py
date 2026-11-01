@@ -122,3 +122,66 @@ def build_process_rows(
             row.process_role.casefold(),
         ),
     )
+
+
+def row_matches_search(row: ProcessRow, query: str) -> bool:
+    """Case-insensitively match each search term against process details."""
+    terms = query.casefold().split()
+    if not terms:
+        return True
+
+    searchable_fields = [
+        row.executable,
+        row.process_role,
+        "active" if row.active else "waiting",
+        str(row.process_id) if row.process_id is not None else "",
+        str(row.session_count),
+        *(str(volume) for volume in row.current_volumes),
+        *row.session_details,
+    ]
+    if row.rule is not None:
+        searchable_fields.extend((
+            str(row.rule.volume),
+            "enabled" if row.rule.enabled else "disabled",
+            "process profile" if row.rule.is_process_specific else "app rule",
+        ))
+    searchable_text = " ".join(searchable_fields).casefold()
+    return all(term in searchable_text for term in terms)
+
+
+def row_values(row: ProcessRow, checked: bool, temporary_target: int | None) -> tuple[str, ...]:
+    """Return the table cells for a row, in column order."""
+    if row.current_volumes:
+        current_volume = f"{row.current_volumes[0]}%" if len(row.current_volumes) == 1 else "Mixed"
+    else:
+        current_volume = "—"
+    target = (
+        f"{temporary_target}%" if temporary_target is not None
+        else f"{row.rule.volume}%" if row.rule is not None
+        else "—"
+    )
+    if not row.active:
+        if row.rule and not row.rule.enabled:
+            status = "Saved rule disabled"
+        elif row.rule and row.rule.is_process_specific:
+            status = "Waiting for matching profile"
+        else:
+            status = "Waiting for app audio"
+        process_id = "—"
+        session_count = "0"
+    else:
+        process_id = str(row.process_id) if row.process_id is not None else "Unknown"
+        session_count = str(row.session_count)
+        if temporary_target is not None:
+            status = "Temporary process target"
+        elif row.rule is None:
+            status = "Not configured"
+        elif not row.rule.enabled:
+            status = "Rule disabled"
+        elif row.rule.is_process_specific:
+            status = "Saved process profile"
+        else:
+            status = "App rule"
+    details = "; ".join(row.session_details) or "—"
+    return ("☑" if checked else "☐", row.executable, process_id, session_count, details,
+            current_volume, target, status)

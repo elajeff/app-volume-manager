@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 from app import VolumeManagerApp
 from app_volume_manager.process_list import ProcessRow
 from app_volume_manager.rules import AppRule
+from app_volume_manager.selection import TemporaryTargets
 from app_volume_manager.volume_service import AudioSession, VolumeRuleEngine
 
 
@@ -16,7 +17,7 @@ class RuleActionTests(unittest.TestCase):
         app.backend = Mock(last_warnings=[])
         app.backend.get_sessions.return_value = []
         app.rules, app.engine = [], VolumeRuleEngine()
-        app.temporary_process_targets, app.temporary_processes = {}, {}
+        app.temporary = TemporaryTargets()
         app.store, app.status_var, app._refresh_table = Mock(), Mock(), Mock()
         return app
 
@@ -24,10 +25,9 @@ class RuleActionTests(unittest.TestCase):
         app = self.make_app()
         key = (123, "discord.exe")
         process = Mock(is_running=lambda: True)
-        app.temporary_process_targets[key] = 20
-        app.temporary_processes[key] = process
+        app.temporary.add(key, 20, process)
         app._scan_sessions(update_table=False)
-        self.assertEqual(app.temporary_process_targets[key], 20)
+        self.assertEqual(app.temporary.get(key), 20)
         calls = []
         session = AudioSession("Discord.exe", "new-device", calls.append, process_id=123, current_volume=100)
         app.backend.get_sessions.return_value = [session]
@@ -38,8 +38,8 @@ class RuleActionTests(unittest.TestCase):
         session.current_volume = 100
         app._scan_sessions(update_table=False)
         self.assertEqual(calls, [20])
-        self.assertEqual(app.temporary_process_targets, {})
-        self.assertEqual(app.temporary_processes, {})
+        self.assertEqual(app.temporary.live(), {})
+        self.assertNotIn(key, app.temporary)
 
     def test_temporary_selection_records_process_identity(self):
         app = self.make_app()
@@ -48,11 +48,11 @@ class RuleActionTests(unittest.TestCase):
         app._row_info = app._all_row_info = {row.row_id: row}
         app.target_volume_var = Mock(get=lambda: 20)
         process = Mock(is_running=lambda: True)
-        with patch("app.psutil.Process", return_value=process):
+        with patch("app_volume_manager.selection.psutil.Process", return_value=process):
             app.apply_to_selected()
         key = (123, "discord.exe")
-        self.assertEqual(app.temporary_process_targets[key], 20)
-        self.assertIs(app.temporary_processes[key], process)
+        self.assertEqual(app.temporary.get(key), 20)
+        self.assertIs(app.temporary._processes[key], process)
         app.store.save_rules.assert_not_called()
 
     def test_remove_clears_temporary_targets_with_or_without_saved_rule(self):
@@ -65,12 +65,10 @@ class RuleActionTests(unittest.TestCase):
                     row = ProcessRow("discord", "Discord.exe", 123, 1, (20,), rule, True)
                     app._selected_rows = lambda: [row]
                     key = (123, "discord.exe")
-                    app.temporary_process_targets[key] = 20
-                    app.temporary_processes[key] = Mock()
+                    app.temporary.add(key, 20, Mock())
                     with patch("app.messagebox.askyesno", return_value=confirmed):
                         app.remove_selected()
-                    self.assertEqual(key in app.temporary_process_targets, not confirmed)
-                    self.assertEqual(key in app.temporary_processes, not confirmed)
+                    self.assertEqual(key in app.temporary, not confirmed)
                     self.assertEqual(app.store.save_rules.call_count, int(saved and confirmed))
                     if confirmed:
                         self.assertEqual(app.rules, [])
@@ -82,10 +80,9 @@ class RuleActionTests(unittest.TestCase):
         app.rules = [rule]
         app._selected_rows = lambda: [ProcessRow("discord", "Discord.exe", 123, 1, (20,), rule, True)]
         key = (123, "discord.exe")
-        app.temporary_process_targets[key] = 20
-        app.temporary_processes[key] = Mock()
+        app.temporary.add(key, 20, Mock())
         app.store.save_rules.side_effect = SettingsError("read only")
         with patch("app.messagebox.askyesno", return_value=True), patch("app.messagebox.showerror"):
             app.remove_selected()
         self.assertEqual(app.rules, [rule])
-        self.assertEqual(app.temporary_process_targets[key], 20)
+        self.assertEqual(app.temporary.get(key), 20)
