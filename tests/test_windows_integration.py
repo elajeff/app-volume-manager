@@ -32,13 +32,23 @@ class WindowsIntegrationTests(unittest.TestCase):
         # The task is never run. Use the current interpreter to validate quoting
         # and scheduler registration without depending on the repository path.
         with patch.object(startup, "_task_name", return_value=name), \
-             patch.object(startup, "_startup_parts", return_value=(str(executable), "--version", str(executable.parent))), \
+             patch.object(startup, "_startup_parts",
+                          return_value=(str(executable), "--version", str(executable.parent))), \
              patch.object(startup, "_remove_legacy"), \
              patch.object(startup, "_legacy_enabled", return_value=False):
             try:
                 self.assertFalse(startup.is_startup_enabled())
                 startup.set_startup_enabled(True)
                 self.assertTrue(startup.is_startup_enabled())
+                self.assertEqual(startup._run_task_command("query"), "true")
+
+                # A task registered by an older version at Task Scheduler's
+                # default priority is reported as outdated and registered again.
+                with patch.object(startup, "TASK_PRIORITY", 7):
+                    startup.set_startup_enabled(True)
+                self.assertEqual(startup._run_task_command("query"), "outdated")
+                self.assertTrue(startup.check_startup())
+                self.assertEqual(startup._run_task_command("query"), "true")
             finally:
                 startup.set_startup_enabled(False)
             self.assertFalse(startup.is_startup_enabled())

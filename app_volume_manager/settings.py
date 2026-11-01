@@ -5,6 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from app_volume_manager.color_utils import normalize_hex_color
 from app_volume_manager.rules import AppRule
 
 
@@ -101,15 +102,6 @@ class PreferenceStore:
         default_path = default_settings_path().with_name("preferences.json")
         self.path = Path(path) if path is not None else default_path
 
-    @staticmethod
-    def _valid_color(value: object) -> bool:
-        return (
-            isinstance(value, str)
-            and len(value) == 7
-            and value.startswith("#")
-            and all(character in "0123456789abcdefABCDEF" for character in value[1:])
-        )
-
     def _read_preferences(self) -> dict:
         if not self.path.exists():
             return {
@@ -129,14 +121,13 @@ class PreferenceStore:
                 "slider_thumb_color",
                 data.get("knob_color", self.DEFAULT_SLIDER_THUMB_COLOR),
             )
-            if not self._valid_color(color):
-                raise ValueError("Slider color must be a six-digit HEX color such as #1677FF.")
+            color = normalize_hex_color(color)
             # Remove the legacy key so writes migrate to one canonical field.
             normalized = {
                 key: value for key, value in data.items()
                 if key not in {"knob_color", "slider_thumb_color"}
             }
-            return {**normalized, "slider_thumb_color": color.upper()}
+            return {**normalized, "slider_thumb_color": color}
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise SettingsError(
                 f"Could not read preferences file:\n{self.path}\n\n"
@@ -156,9 +147,10 @@ class PreferenceStore:
         _write_json_atomically(self.path, data, "preferences")
 
     def save_slider_thumb_color(self, color: str) -> None:
-        if not self._valid_color(color):
-            raise SettingsError("Slider color must be a six-digit HEX color such as #1677FF.")
+        try:
+            color = normalize_hex_color(color)
+        except ValueError as exc:
+            raise SettingsError(str(exc)) from exc
         data = self._read_preferences()
-        data["slider_thumb_color"] = color.upper()
+        data["slider_thumb_color"] = color
         _write_json_atomically(self.path, data, "preferences")
-

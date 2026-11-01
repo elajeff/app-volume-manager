@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
-from typing import Callable
+from collections.abc import Callable
+
+log = logging.getLogger(__name__)
+
+# What changed: a playback device appeared/disappeared, or only sessions did.
+DEVICES_CHANGED = "devices"
+SESSIONS_CHANGED = "sessions"
 
 
 class AudioSessionMonitor:
@@ -16,13 +23,14 @@ class AudioSessionMonitor:
         self,
         wrap_session: Callable,
         on_session_created: Callable,
-        on_change: Callable[[], None],
+        on_change: Callable[[str], None],
     ) -> None:
         self._wrap_session = wrap_session
         self._on_session_created = on_session_created
         self._on_change = on_change
         self._stop_event = threading.Event()
         self._refresh_event = threading.Event()
+        self._devices_changed = threading.Event()
         self._session_registrations: dict[tuple[str, str], tuple[object, object]] = {}
         self._thread: threading.Thread | None = None
         self._status_lock = threading.Lock()
@@ -41,6 +49,11 @@ class AudioSessionMonitor:
     def last_error(self) -> str | None:
         with self._status_lock:
             return self._last_error
+
+    @property
+    def healthy(self) -> bool:
+        with self._status_lock:
+            return self._ready and not self._last_error
 
     def start(self) -> None:
         if self._thread is not None:
@@ -64,14 +77,14 @@ class AudioSessionMonitor:
             self._ready = ready
             self._last_error = error
         if changed:
-            self._signal_change()
+            self._signal_change(DEVICES_CHANGED)
 
-    def _signal_change(self) -> None:
+    def _signal_change(self, kind: str) -> None:
         try:
-            self._on_change()
+            self._on_change(kind)
         except Exception:
             # An external callback must never terminate the COM listener thread.
-            pass
+            log.exception("Audio change notification failed")
 
     def _new_session(self, raw_session, endpoint_id: str, device_name: str) -> None:
         try:
@@ -85,14 +98,18 @@ class AudioSessionMonitor:
                 self._on_session_created(session)
         except Exception:
             # The UI thread is still prompted to rescan and retry if possible.
-            pass
+            log.exception("Could not apply the saved volume to a new audio session")
         finally:
-            self._refresh_event.set()
-            self._signal_change()
+            self._session_changed()
 
     def _device_changed(self) -> None:
+        self._devices_changed.set()
         self._refresh_event.set()
-        self._signal_change()
+        self._signal_change(DEVICES_CHANGED)
+
+    def _session_changed(self) -> None:
+        self._refresh_event.set()
+        self._signal_change(SESSIONS_CHANGED)
 
     def _watch_session(self, session, endpoint_id: str, callback_type) -> None:
         key = (endpoint_id, str(session.InstanceIdentifier))
@@ -107,19 +124,19 @@ class AudioSessionMonitor:
             def on_simple_volume_changed(self, new_volume, new_mute, event_context):
                 # Rescan on the GUI's COM apartment; never move this session's
                 # volume interface to the Tk thread. Events are coalesced there.
-                monitor._signal_change()
+                monitor._signal_change(SESSIONS_CHANGED)
 
             def on_state_changed(self, new_state, new_state_id):
-                monitor._device_changed()
+                monitor._session_changed()
 
             def on_session_disconnected(self, reason, reason_id):
-                monitor._device_changed()
+                monitor._session_changed()
 
         callback = SessionEvents()
         session.register_notification(callback)
         self._session_registrations[key] = (session, callback)
         # Catch a reset that occurred between the first scan and registration.
-        self._signal_change()
+        self._signal_change(SESSIONS_CHANGED)
 
     def _unwatch_session(self, key) -> None:
         registration = self._session_registrations.pop(key, None)
@@ -133,6 +150,8 @@ class AudioSessionMonitor:
         comtypes = None
         com_initialized = False
         device_enumerator = device_callback = None
+        devices_loaded = False
+        active_devices: dict = {}
         try:
             import comtypes as comtypes_module
 
@@ -177,20 +196,23 @@ class AudioSessionMonitor:
                         device_callback = callback
                     except Exception as exc:
                         errors.append(f"Device notifications unavailable: {exc}")
-                try:
-                    devices = AudioUtilities.GetAllDevices(
-                        data_flow=EDataFlow.eRender.value,
-                        device_state=DEVICE_STATE.ACTIVE.value,
-                    )
-                except Exception as exc:
-                    devices = []
-                    errors.append(f"Could not enumerate playback devices: {exc}")
-
-                active_devices = {
-                    str(getattr(device, "id", "")): device
-                    for device in (devices or [])
-                    if str(getattr(device, "id", ""))
-                }
+                if self._devices_changed.is_set() or not devices_loaded:
+                    self._devices_changed.clear()
+                    try:
+                        devices = AudioUtilities.GetAllDevices(
+                            data_flow=EDataFlow.eRender.value,
+                            device_state=DEVICE_STATE.ACTIVE.value,
+                        )
+                        devices_loaded = True
+                    except Exception as exc:
+                        devices = []
+                        devices_loaded = False
+                        errors.append(f"Could not enumerate playback devices: {exc}")
+                    active_devices = {
+                        str(getattr(device, "id", "")): device
+                        for device in (devices or [])
+                        if str(getattr(device, "id", ""))
+                    }
                 changed = False
 
                 # Unregister endpoints that disappeared or were disabled.
@@ -246,14 +268,16 @@ class AudioSessionMonitor:
 
                 self._set_status(bool(self._registrations), " | ".join(errors[:2]) or None)
                 if changed:
-                    self._signal_change()
+                    self._signal_change(DEVICES_CHANGED)
 
                 registration_healthy = self.is_ready and not errors
                 interval = (
                     self.DEVICE_REFRESH_SECONDS if registration_healthy
                     else self.RETRY_SECONDS
                 )
-                self._refresh_event.wait(interval)
+                if not self._refresh_event.wait(interval):
+                    # Periodic safety net in case a device notification was missed.
+                    self._devices_changed.set()
         except Exception as exc:
             self._set_status(False, str(exc))
         finally:

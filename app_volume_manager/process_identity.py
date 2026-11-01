@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import PureWindowsPath
-from typing import Sequence
 
 _ROLE_SWITCHES = {
     "--type": "type",

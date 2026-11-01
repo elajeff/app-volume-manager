@@ -3,7 +3,6 @@
 import ctypes
 from ctypes import wintypes
 
-
 MUTEX_NAME = r"Local\AppVolumeManager"
 SHOW_EVENT_NAME = r"Local\AppVolumeManager.Show"
 

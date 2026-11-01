@@ -2,36 +2,38 @@
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
 
-from app import VolumeManagerApp
+from app_volume_manager.volume_service import AudioSession
+from tests.support import open_window
 
 
 class ProcessRowClickTests(unittest.TestCase):
     def setUp(self):
-        self.app = VolumeManagerApp.__new__(VolumeManagerApp)
-        self.app.table = Mock()
-        self.app.table.identify_region.return_value = "cell"
-        self.app.table.identify_row.return_value = "discord-row"
-        self.app.table.get_children.return_value = ("discord-row",)
-        self.app._row_info = {"discord-row": object()}
-        self.app.checked_rows = set()
-        self.app._refresh_table = Mock()
+        self.app = open_window(self, sessions=[
+            AudioSession(
+                "Discord.exe", "discord-session", lambda _value: None,
+                process_id=4242, current_volume=35, process_signature="discord.exe|main",
+                process_role="Main process",
+            )
+        ])
+        self.app.root.update()
+        self.row_id = next(iter(self.app._row_info))
+        x, y, _width, _height = self.app.table.bbox(self.row_id, "pid")
+        self.cell = SimpleNamespace(x=x + 2, y=y + 2)
 
     def test_clicking_a_row_toggles_selection_and_keeps_highlight(self):
-        event = SimpleNamespace(x=320, y=12)
-        self.assertEqual(self.app._on_table_click(event), "break")
-        self.assertEqual(self.app.checked_rows, {"discord-row"})
-        self.app.table.selection_set.assert_called_once_with("discord-row")
-        self.app.table.focus.assert_called_once_with("discord-row")
-        self.app._on_table_click(event)
+        self.assertEqual(self.app._on_table_click(self.cell), "break")
+        self.assertEqual(self.app.checked_rows, {self.row_id})
+        self.assertEqual(self.app.table.selection(), (self.row_id,))
+        self.assertEqual(self.app.table.focus(), self.row_id)
+        self.app._on_table_click(self.cell)
         self.assertEqual(self.app.checked_rows, set())
 
     def test_click_outside_a_data_cell_is_not_intercepted(self):
-        self.app.table.identify_region.return_value = "heading"
-        self.assertIsNone(self.app._on_table_click(SimpleNamespace(x=320, y=0)))
+        heading = SimpleNamespace(x=self.cell.x, y=2)
+        self.assertIsNone(self.app._on_table_click(heading))
         self.assertEqual(self.app.checked_rows, set())
-        self.app._refresh_table.assert_not_called()
+        self.assertEqual(self.app.table.item(self.row_id, "values")[0], "☐")
 
 
 if __name__ == "__main__":

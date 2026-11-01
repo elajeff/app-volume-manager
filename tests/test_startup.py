@@ -22,7 +22,9 @@ class StartupTests(unittest.TestCase):
         self.assertIn("AppVolumeManager.exe", command)
 
     def test_task_query_and_legacy_startup_status(self):
-        for query, legacy, enabled in (("true", False, True), ("false", True, True), ("false", False, False)):
+        for query, legacy, enabled in (
+            ("true", False, True), ("outdated", False, True), ("false", True, True), ("false", False, False),
+        ):
             with self.subTest(query=query, legacy=legacy), patch.object(startup.os, "name", "nt"), \
                  patch.object(startup, "_run_task_command", return_value=query), \
                  patch.object(startup, "_legacy_enabled", return_value=legacy):
@@ -76,13 +78,27 @@ class StartupTests(unittest.TestCase):
                 startup._run_task_command("enable")
         self.assertEqual(run.call_args.kwargs["timeout"], 20)
 
-    def test_migrates_only_an_enabled_legacy_entry(self):
-        for enabled in (False, True):
-            with self.subTest(enabled=enabled), patch.object(startup.os, "name", "nt"), \
-                 patch.object(startup, "_legacy_enabled", return_value=enabled), \
-                 patch.object(startup, "set_startup_enabled") as register:
-                startup.migrate_startup()
-                self.assertEqual(register.call_count, int(enabled))
+    def test_check_upgrades_legacy_entries_and_outdated_tasks(self):
+        cases = (
+            # legacy Run entry, task query result, reported state, task commands run
+            (True, None, True, []),
+            (False, "true", True, ["query"]),
+            (False, "outdated", True, ["query", "enable"]),
+            (False, "false", False, ["query"]),
+        )
+        for legacy, state, expected, commands in cases:
+            with self.subTest(legacy=legacy, state=state), patch.object(startup.os, "name", "nt"), \
+                 patch.object(startup, "_legacy_enabled", return_value=legacy), \
+                 patch.object(startup, "set_startup_enabled") as register, \
+                 patch.object(startup, "_run_task_command", return_value=state) as run:
+                self.assertEqual(startup.check_startup(), expected)
+                self.assertEqual(register.call_count, int(legacy))
+                self.assertEqual([call.args[0] for call in run.call_args_list], commands)
+
+    def test_check_is_a_no_op_off_windows(self):
+        with patch.object(startup.os, "name", "posix"), patch.object(startup, "_run_task_command") as run:
+            self.assertFalse(startup.check_startup())
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

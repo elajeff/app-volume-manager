@@ -1,65 +1,78 @@
 """Startup protection ordering and duplicate-launch behavior, without Windows APIs."""
 
+import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
-from app import VolumeManagerApp
+from app_volume_manager.audio_monitor import DEVICES_CHANGED, SESSIONS_CHANGED
 from app_volume_manager.rules import AppRule
 from app_volume_manager.settings import SettingsError
 from app_volume_manager.single_instance import SingleInstance
+from app_volume_manager.ui.main_window import VolumeManagerApp
 from app_volume_manager.volume_service import AudioSession
+from tests.support import FakeBackend, FakeRuleStore, close_window, fake_startup, open_window
+
+MESSAGEBOX = "app_volume_manager.ui.main_window.messagebox"
 
 
 class StartupRuntimeTests(unittest.TestCase):
     def test_restores_audio_before_ui_and_does_not_block_hidden_launch_on_preferences(self):
         events = []
-        root = Mock()
-        backend = Mock()
-        backend.initialize.side_effect = lambda: events.append("initialize")
-        backend.get_sessions.return_value = [AudioSession(
+        backend = FakeBackend([AudioSession(
             "Discord.exe", "voice", lambda value: events.append(("volume", value)), current_volume=100,
-        )]
-        store, preferences, monitor = Mock(), Mock(), Mock()
-        store.load_rules.return_value = [AppRule("Discord.exe", 15)]
+        )])
+        backend.initialize = lambda: events.append("initialize")
+
+        def monitor_factory(**_callbacks):
+            monitor = Mock(healthy=True)
+            monitor.start.side_effect = lambda: events.append("monitor")
+            return monitor
+
+        preferences = Mock()
         preferences.load_preferences.side_effect = SettingsError("broken appearance")
-        monitor.start.side_effect = lambda: events.append("monitor")
+        build_ui = VolumeManagerApp._build_ui
 
-        def build_ui(app):
+        def recording_build_ui(app):
             events.append("ui")
-            app.status_var, app.startup_var, app.startup_status_var = Mock(), Mock(), Mock()
+            build_ui(app)
 
-        with patch("app.WindowsAudioBackend", return_value=backend), \
-             patch("app.SettingsStore", return_value=store), \
-             patch("app.PreferenceStore", return_value=preferences), \
-             patch("app.AudioSessionMonitor", return_value=monitor), \
-             patch.object(VolumeManagerApp, "_start_startup_update"), \
-             patch.object(VolumeManagerApp, "_set_window_icon"), \
-             patch.object(VolumeManagerApp, "_apply_theme"), \
-             patch.object(VolumeManagerApp, "_build_ui", build_ui), \
-             patch.object(VolumeManagerApp, "_start_tray_icon"), \
-             patch("app.messagebox.showwarning") as warning:
-            VolumeManagerApp(root, start_minimized=True)
+        with patch.object(VolumeManagerApp, "_build_ui", recording_build_ui), \
+             patch(f"{MESSAGEBOX}.showwarning") as warning:
+            app = open_window(
+                self, start_minimized=True, backend=backend, store=FakeRuleStore([AppRule("Discord.exe", 15)]),
+                preference_store=preferences, monitor_factory=monitor_factory,
+            )
         self.assertEqual(events[:4], ["initialize", "monitor", ("volume", 15), "ui"])
-        root.withdraw.assert_called_once_with()
+        self.assertEqual(app.root.state(), "withdrawn")
+        self.assertIn("broken appearance", app.status_var.get())
         warning.assert_not_called()
 
     def test_notification_failure_immediately_switches_hidden_polling_to_fallback(self):
-        import queue
-        for ready, error, expected in ((True, None, 60_000), (False, "disconnected", 5_000)):
-            with self.subTest(ready=ready):
-                app = VolumeManagerApp.__new__(VolumeManagerApp)
-                app.root = Mock()
-                app._closing = False
-                app.window_visible = False
-                app.audio_monitor = Mock(is_ready=ready, last_error=error)
-                app._audio_event_queue = queue.SimpleQueue()
-                app._audio_event_queue.put(True)
-                app._scan_sessions = Mock()
-                app._schedule_poll = Mock()
-                app._process_audio_events()
-                app._scan_sessions.assert_called_once_with(update_table=False)
-                app._schedule_poll.assert_called_once_with(expected)
+        for healthy, expected in ((True, 60_000), (False, 5_000)):
+            with self.subTest(healthy=healthy):
+                app = open_window(self, monitor_factory=lambda **_callbacks: Mock(healthy=healthy))
+                try:
+                    app.window_visible = False
+                    app._audio_event_queue.put(SESSIONS_CHANGED)
+                    with patch.object(app, "_scan_sessions") as scan, patch.object(app, "_schedule_poll") as poll:
+                        app._process_audio_events()
+                    scan.assert_called_once_with(update_table=False)
+                    poll.assert_called_once_with(expected)
+                    self.assertEqual(app.backend.invalidated, 0)
+                finally:
+                    close_window(app)
 
+    def test_device_events_make_the_next_sweep_list_devices_again(self):
+        app = open_window(self)
+        app.window_visible = False
+        app._audio_event_queue.put(DEVICES_CHANGED)
+        with patch.object(app, "_scan_sessions"), patch.object(app, "_schedule_poll"):
+            app._process_audio_events()
+        self.assertEqual(app.backend.invalidated, 1)
+
+
+class SingleInstanceTests(unittest.TestCase):
     def test_duplicate_launch_signals_existing_copy_and_releases_handles(self):
         for existing, show in ((False, True), (True, True), (True, False)):
             with self.subTest(existing=existing, show=show):
@@ -78,24 +91,30 @@ class StartupRuntimeTests(unittest.TestCase):
 
 
 class StartupWorkerTests(unittest.TestCase):
+    def test_hidden_sign_in_launch_checks_the_task_only_later(self):
+        check = Mock(return_value=True)
+        app = open_window(self, start_minimized=True, startup=fake_startup(check_startup=check))
+        self.assertFalse(app._startup_checked)
+        self.assertIsNotNone(app._startup_check_after_id)
+        app.show_window()  # Opening the window early runs the check right away.
+        self.wait_for_result(app)
+        app._process_startup_results()
+        check.assert_called_once_with()
+        self.assertTrue(app.startup_var.get())
+        app.show_window()
+        self.assertEqual(check.call_count, 1)
+
+    def wait_for_result(self, app):
+        deadline = time.monotonic() + 2
+        while app._startup_results.empty():
+            if time.monotonic() > deadline:
+                self.fail("the startup worker did not finish")
+            time.sleep(0.01)
+
     def test_startup_worker_keeps_ui_free_and_delivers_success_or_failure_on_ui_poll(self):
-        import queue
-        import threading
         for fail in (False, True):
             with self.subTest(fail=fail):
-                app = VolumeManagerApp.__new__(VolumeManagerApp)
-                app._startup_busy, app._startup_enabled, app.window_visible = False, False, True
-                app._startup_results = queue.SimpleQueue()
-                app.startup_checkbutton, app.startup_status_var = Mock(), Mock()
-                app.startup_var, app.status_var = Mock(), Mock()
                 entered, release = threading.Event(), threading.Event()
-                workers = []
-                real_thread = threading.Thread
-
-                def start_thread(**kwargs):
-                    worker = real_thread(**kwargs)
-                    workers.append(worker)
-                    return worker
 
                 def update(_enabled):
                     entered.set()
@@ -104,23 +123,33 @@ class StartupWorkerTests(unittest.TestCase):
                     if fail:
                         raise OSError("Access denied")
 
-                with patch("app.set_startup_enabled", side_effect=update) as setter, \
-                     patch("app.threading.Thread", side_effect=start_thread), \
-                     patch("app.messagebox.showerror") as error:
-                    try:
+                setter = Mock(side_effect=update)
+                app = open_window(self, startup=fake_startup(set_startup_enabled=setter))
+                try:
+                    # The check the window starts on launch finishes first.
+                    self.wait_for_result(app)
+                    app._process_startup_results()
+                    self.assertFalse(app._startup_busy)
+
+                    with patch(f"{MESSAGEBOX}.showerror") as error:
                         app._start_startup_update(True)
                         self.assertTrue(entered.wait(1))
                         self.assertTrue(app._startup_busy)
                         self.assertTrue(app._startup_results.empty())
-                        app.startup_var.set.assert_not_called()
+                        self.assertFalse(app.startup_var.get())
                         app._start_startup_update(False)  # Ignore a second click while busy.
                         setter.assert_called_once_with(True)
-                    finally:
                         release.set()
-                        for worker in workers:
-                            worker.join(timeout=2)
-                    app._process_startup_results()
+                        self.wait_for_result(app)
+                        app._process_startup_results()
                     self.assertFalse(app._startup_busy)
-                    app.startup_var.set.assert_called_once_with(not fail)
+                    self.assertEqual(app.startup_var.get(), not fail)
                     self.assertEqual(error.call_count, int(fail))
-                    app.startup_checkbutton.state.assert_any_call(["!disabled"])
+                    self.assertTrue(app.startup_checkbutton.instate(["!disabled"]))
+                finally:
+                    release.set()
+                    close_window(app)
+
+
+if __name__ == "__main__":
+    unittest.main()

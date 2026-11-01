@@ -1,7 +1,9 @@
 import unittest
 from types import SimpleNamespace
 
-from app import VolumeManagerApp, allow_scale_thumb_click
+from app_volume_manager.ui.volume_scale import allow_scale_thumb_click
+from app_volume_manager.volume_service import AudioSession
+from tests.support import open_window
 
 
 class FakeScale:
@@ -25,28 +27,21 @@ class ScaleInteractionTests(unittest.TestCase):
                 self.assertEqual(allow_scale_thumb_click(self.event_for(element)), "break")
 
     def test_volume_scale_is_disabled_until_a_process_is_checked(self):
-        class FakeVolumeScale:
-            def __init__(self):
-                self.last_state = None
+        app = open_window(self, sessions=[
+            AudioSession("Discord.exe", "session", lambda _value: None, process_id=4242, current_volume=35),
+        ])
+        row_id = next(iter(app._all_row_info))
+        self.assertTrue(app.volume_scale.instate(["disabled"]))
+        self.assertEqual(app.target_volume_label.get(), "Select a process to change volume")
 
-            def state(self, value):
-                self.last_state = value
-
-        app = VolumeManagerApp.__new__(VolumeManagerApp)
-        app.volume_scale = FakeVolumeScale()
-        app.checked_rows = set()
-        app._row_info = {"discord": object()}
-
+        app.checked_rows.add(row_id)
         app._sync_volume_scale_enabled()
-        self.assertEqual(app.volume_scale.last_state, ["disabled"])
-
-        app.checked_rows.add("discord")
-        app._sync_volume_scale_enabled()
-        self.assertEqual(app.volume_scale.last_state, ["!disabled"])
+        self.assertTrue(app.volume_scale.instate(["!disabled"]))
+        self.assertEqual(app.target_volume_label.get(), "Volume for selected: 50%")
 
         app.checked_rows.clear()
         app._sync_volume_scale_enabled()
-        self.assertEqual(app.volume_scale.last_state, ["disabled"])
+        self.assertTrue(app.volume_scale.instate(["disabled"]))
 
 
 if __name__ == "__main__":

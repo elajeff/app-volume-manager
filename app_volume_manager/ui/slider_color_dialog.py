@@ -2,16 +2,17 @@
 
 import colorsys
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
-from typing import Callable
 
 from app_volume_manager.color_utils import (
-    hex_to_rgb, hsv_to_hex, normalize_hex_color, rgb_to_hex,
+    hex_to_rgb,
+    hsv_to_hex,
+    normalize_hex_color,
+    rgb_to_hex,
 )
 from app_volume_manager.settings import PreferenceStore, SettingsError
-
-APP_NAME = "App Volume Manager"
-DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
+from app_volume_manager.ui import APP_NAME
 
 
 def show_slider_color_dialog(
@@ -40,7 +41,10 @@ def show_slider_color_dialog(
     frame.pack(fill="both", expand=True)
     ttk.Label(
         frame,
-        text="Hover to preview. Click a point to keep its color while moving away; leave and re-enter to preview again. Drag to adjust continuously.",
+        text=(
+            "Hover to preview. Click a point to keep its color while moving away; "
+            "leave and re-enter to preview again. Drag to adjust continuously."
+        ),
         wraplength=430,
     ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
@@ -63,7 +67,7 @@ def show_slider_color_dialog(
         row=0, column=0, columnspan=2, sticky="w", pady=(0, 4)
     )
     rgb_vars = [tk.StringVar(value=str(channel)) for channel in current_rgb]
-    for row_index, (label, variable) in enumerate(zip(("Red", "Green", "Blue"), rgb_vars), start=1):
+    for row_index, (label, variable) in enumerate(zip(("Red", "Green", "Blue"), rgb_vars, strict=True), start=1):
         ttk.Label(fields_frame, text=label).grid(row=row_index, column=0, sticky="w", padx=(0, 8))
         entry = ttk.Entry(fields_frame, textvariable=variable, width=6, justify="right")
         entry.grid(row=row_index, column=1, sticky="ew", pady=2)
@@ -86,9 +90,6 @@ def show_slider_color_dialog(
     hue_photo = tk.PhotoImage(master=dialog, width=hue_width, height=palette_height)
     palette_canvas.create_image(0, 0, image=palette_photo, anchor="nw")
     hue_canvas.create_image(0, 0, image=hue_photo, anchor="nw")
-    # Keep explicit references while the modal dialog is open.
-    dialog.palette_photo = palette_photo
-    dialog.hue_photo = hue_photo
     rendered_hue = -1.0
     # Hover previews are convenient, but once a user clicks a point, keep
     # that choice fixed while they move the pointer away to Save. Leaving
@@ -96,15 +97,22 @@ def show_slider_color_dialog(
     palette_locked = False
     hue_locked = False
 
+    saturations = [x / (palette_width - 1) for x in range(palette_width)]
+
     def draw_palette(hue: float) -> None:
+        # This runs on every hue change, so it skips hsv_to_hex()'s validation
+        # and hands Tk the whole image in one call.
         nonlocal rendered_hue
+        hsv_to_rgb = colorsys.hsv_to_rgb
+        rows = []
         for y in range(palette_height):
             value = 1.0 - y / (palette_height - 1)
-            row_colors = [
-                hsv_to_hex(hue, x / (palette_width - 1), value)
-                for x in range(palette_width)
-            ]
-            palette_photo.put("{" + " ".join(row_colors) + "}", to=(0, y))
+            cells = []
+            for saturation in saturations:
+                red, green, blue = hsv_to_rgb(hue, saturation, value)
+                cells.append(f"#{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}")
+            rows.append("{" + " ".join(cells) + "}")
+        palette_photo.put(" ".join(rows))
         rendered_hue = hue
 
     def draw_hue_strip() -> None:
@@ -180,7 +188,7 @@ def show_slider_color_dialog(
         syncing_fields = True
         try:
             if fields in {"all", "rgb"}:
-                for variable, channel in zip(rgb_vars, (red, green, blue)):
+                for variable, channel in zip(rgb_vars, (red, green, blue), strict=True):
                     variable.set(str(channel))
             if fields in {"all", "hex"}:
                 hex_var.set(current_color)
@@ -254,8 +262,7 @@ def show_slider_color_dialog(
         y = max(0, min(palette_height - 1, event.y))
         hsv[0] = y / (palette_height - 1)
         active_editor = None
-        # Immediately redraw the large square as the hue changes. Previously
-        # its colors stayed stale until the pointer moved back over the square.
+        # Redraw the square as soon as the hue changes.
         if abs(hsv[0] - rendered_hue) > 0.0001:
             draw_palette(hsv[0])
         draw_hue_marker(hsv[0])
@@ -331,7 +338,7 @@ def show_slider_color_dialog(
         active_editor = None
         palette_locked = False
         hue_locked = False
-        update_preview(DEFAULT_SLIDER_THUMB_COLOR, recalculate_hsv=True)
+        update_preview(PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR, recalculate_hsv=True)
 
     ttk.Button(
         buttons, text="Reset to default", command=reset_to_default
@@ -342,4 +349,3 @@ def show_slider_color_dialog(
     dialog.bind("<Return>", lambda _event: save())
     dialog.grab_set()
     parent.wait_window(dialog)
-

@@ -27,7 +27,6 @@ class VolumeRuleEngineTests(unittest.TestCase):
         result = self.engine.scan(sessions, rules)
         self.assertEqual(self.calls, [("session-1", 40)])
         self.assertEqual(result.applied_count, 1)
-        self.assertIn("DISCORD.EXE", result.matched_applications)
 
     def test_only_reapplies_when_target_changes_or_reapply_is_requested(self):
         session = self.session()

@@ -10,13 +10,15 @@ class _Volume:
     def __init__(self, value=0.35):
         self.value = value
         self.set_values = []
+        self.contexts = []
 
     def GetMasterVolume(self):
         return self.value
 
-    def SetMasterVolume(self, value, _context):
+    def SetMasterVolume(self, value, context):
         self.value = value
         self.set_values.append(value)
+        self.contexts.append(context)
 
 
 class _Process:
@@ -24,6 +26,12 @@ class _Process:
         self.pid = pid
         self._name = name
         self._cmdline = cmdline or [name]
+        self.started = 1.0
+        self.cmdline_reads = 0
+        self.cmdline_error = None
+
+    def create_time(self):
+        return self.started
 
     def name(self):
         return self._name
@@ -32,6 +40,9 @@ class _Process:
         return rf"C:\Apps\{self._name}"
 
     def cmdline(self):
+        self.cmdline_reads += 1
+        if self.cmdline_error:
+            raise self.cmdline_error
         return self._cmdline
 
 
@@ -128,6 +139,67 @@ class AudioBackendTests(unittest.TestCase):
         self.assertEqual(result[0].process_id, 555)
         self.assertEqual(result[0].device_name, "Test Speakers")
         self.assertEqual(result[0].process_signature, "discord.exe|main")
+
+    def sweep(self, backend, sessions):
+        """Run get_sessions against a freshly listed device whose only sessions are `sessions`."""
+        backend.invalidate_devices()
+        class Manager:
+            def GetSessionEnumerator(self):
+                return types.SimpleNamespace(GetCount=lambda: len(sessions), GetSession=lambda i: sessions[i])
+        device = _Device()
+        device.AudioSessionManager = Manager()
+        modules = self.fake_pycaw([device], [])
+        with patch("sys.platform", "win32"), patch.dict(sys.modules, modules):
+            return backend.get_sessions()
+
+    def test_devices_are_listed_once_until_invalidated(self):
+        listings = []
+        modules = self.fake_pycaw([_Device()], [])
+        modules["pycaw.pycaw"].AudioUtilities.GetAllDevices = lambda **_kwargs: listings.append(1) or [_Device()]
+        backend = WindowsAudioBackend()
+        with patch("sys.platform", "win32"), patch.dict(sys.modules, modules):
+            backend.get_sessions()
+            backend.get_sessions()
+            self.assertEqual(len(listings), 1)
+            backend.invalidate_devices()
+            backend.get_sessions()
+        self.assertEqual(len(listings), 2)
+
+    def test_a_failing_device_forces_a_fresh_listing(self):
+        class BrokenDevice(_Device):
+            @property
+            def AudioSessionManager(self):
+                raise OSError("device removed")
+        backend = WindowsAudioBackend()
+        modules = self.fake_pycaw([BrokenDevice()], [_Session(pid=7)])
+        with patch("sys.platform", "win32"), patch.dict(sys.modules, modules):
+            backend.get_sessions()
+        self.assertIsNone(backend._devices)
+
+    def test_process_identity_is_read_once_per_process_start(self):
+        session = _Session(pid=555, cmdline=["Discord.exe", "--type=renderer"])
+        backend = WindowsAudioBackend()
+        first = self.sweep(backend, [session])
+        second = self.sweep(backend, [session])
+        self.assertEqual(session.Process.cmdline_reads, 1)
+        self.assertEqual(first[0].process_signature, second[0].process_signature)
+        self.assertEqual(second[0].process_role, "Renderer process")
+        session.Process.started = 2.0  # The PID was reused by a new process.
+        self.sweep(backend, [session])
+        self.assertEqual(session.Process.cmdline_reads, 2)
+
+    def test_unreadable_command_lines_are_retried_and_closed_processes_forgotten(self):
+        session = _Session(pid=555)
+        session.Process.cmdline_error = PermissionError("starting up")
+        backend = WindowsAudioBackend()
+        self.sweep(backend, [session])
+        self.sweep(backend, [session])
+        self.assertEqual(session.Process.cmdline_reads, 2)
+        session.Process.cmdline_error = None
+        self.sweep(backend, [session])
+        self.assertIn(555, backend._identities)
+        self.sweep(backend, [])
+        self.assertEqual(backend._identities, {})
 
 
 if __name__ == "__main__":

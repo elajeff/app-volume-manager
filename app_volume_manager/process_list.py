@@ -1,9 +1,9 @@
 """Build process-instance rows from live Windows audio sessions and saved rules."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
-from app_volume_manager.rules import AppRule, resolve_rule
+from app_volume_manager.rules import AppRule, resolve_rule, split_rules
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -32,12 +32,7 @@ def build_process_rows(
     closed processes remain visible so saved rules are easy to find and change.
     """
     rule_list = list(rules)
-    app_rules = {rule.executable.casefold(): rule for rule in rule_list if not rule.is_process_specific}
-    process_rules = {
-        rule.process_signature: rule
-        for rule in rule_list
-        if rule.is_process_specific and rule.process_signature is not None
-    }
+    app_rules, process_rules = split_rules(rule_list)
 
     groups: dict[tuple[str, int | None, str], list[AudioSession]] = {}
     display_names: dict[tuple[str, int | None, str], str] = {}
@@ -127,3 +122,66 @@ def build_process_rows(
             row.process_role.casefold(),
         ),
     )
+
+
+def row_matches_search(row: ProcessRow, query: str) -> bool:
+    """Case-insensitively match each search term against process details."""
+    terms = query.casefold().split()
+    if not terms:
+        return True
+
+    searchable_fields = [
+        row.executable,
+        row.process_role,
+        "active" if row.active else "waiting",
+        str(row.process_id) if row.process_id is not None else "",
+        str(row.session_count),
+        *(str(volume) for volume in row.current_volumes),
+        *row.session_details,
+    ]
+    if row.rule is not None:
+        searchable_fields.extend((
+            str(row.rule.volume),
+            "enabled" if row.rule.enabled else "disabled",
+            "process profile" if row.rule.is_process_specific else "app rule",
+        ))
+    searchable_text = " ".join(searchable_fields).casefold()
+    return all(term in searchable_text for term in terms)
+
+
+def row_values(row: ProcessRow, checked: bool, temporary_target: int | None) -> tuple[str, ...]:
+    """Return the table cells for a row, in column order."""
+    if row.current_volumes:
+        current_volume = f"{row.current_volumes[0]}%" if len(row.current_volumes) == 1 else "Mixed"
+    else:
+        current_volume = "—"
+    target = (
+        f"{temporary_target}%" if temporary_target is not None
+        else f"{row.rule.volume}%" if row.rule is not None
+        else "—"
+    )
+    if not row.active:
+        if row.rule and not row.rule.enabled:
+            status = "Saved rule disabled"
+        elif row.rule and row.rule.is_process_specific:
+            status = "Waiting for matching profile"
+        else:
+            status = "Waiting for app audio"
+        process_id = "—"
+        session_count = "0"
+    else:
+        process_id = str(row.process_id) if row.process_id is not None else "Unknown"
+        session_count = str(row.session_count)
+        if temporary_target is not None:
+            status = "Temporary process target"
+        elif row.rule is None:
+            status = "Not configured"
+        elif not row.rule.enabled:
+            status = "Rule disabled"
+        elif row.rule.is_process_specific:
+            status = "Saved process profile"
+        else:
+            status = "App rule"
+    details = "; ".join(row.session_details) or "—"
+    return ("☑" if checked else "☐", row.executable, process_id, session_count, details,
+            current_volume, target, status)
