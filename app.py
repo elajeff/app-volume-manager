@@ -29,6 +29,7 @@ from app_volume_manager.settings import PreferenceStore, SettingsError, Settings
 from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
+from app_volume_manager.ui.theme import PALETTES, apply_base_theme, configure_scrollbars, configure_volume_slider
 from app_volume_manager.ui.windows_shell import destroy_icon, set_app_user_model_id, set_window_icon
 from app_volume_manager.volume_service import VolumeRuleEngine
 
@@ -36,20 +37,7 @@ APP_NAME = "App Volume Manager"
 AUDIO_EVENT_CHECK_MS = 100
 DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
 
-PALETTES = {
-    "light": {
-        "background": "#f3f5f8", "panel": "#ffffff", "text": "#202938",
-        "muted": "#5d6878", "field": "#ffffff", "border": "#d4dce7",
-        "selected": "#d8e8ff", "heading": "#e8edf4", "accent": "#356cc4",
-        "trough": "#d9e0e9",
-    },
-    "dark": {
-        "background": "#171a21", "panel": "#222733", "text": "#e8edf5",
-        "muted": "#b1bbcb", "field": "#1c212b", "border": "#3b4555",
-        "selected": "#344c70", "heading": "#2b3240", "accent": "#8ab4f8",
-        "trough": "#3b4555",
-    },
-}
+
 
 
 def resource_path(relative_path: str) -> Path:
@@ -208,114 +196,16 @@ class VolumeManagerApp:
 
     def _apply_theme(self, theme: str) -> None:
         """Apply a small, consistent light or dark palette to the Tk UI."""
-        self.theme = theme if theme in {"light", "dark"} else "light"
-        colors = self.colors = PALETTES[self.theme]
-        self.root.configure(background=colors["background"])
-        self.style = ttk.Style(self.root)
-        try:
-            if "clam" in self.style.theme_names():
-                self.style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        self.style.configure(
-            ".", font=("Segoe UI", 9), background=colors["background"],
-            foreground=colors["text"],
-        )
-        self.style.configure("TFrame", background=colors["background"])
-        self.style.configure("TLabel", background=colors["background"], foreground=colors["text"])
-        self.style.configure(
-            "TButton", padding=(10, 5), background=colors["panel"],
-            foreground=colors["text"], bordercolor=colors["border"],
-        )
-        self.style.map(
-            "TButton",
-            background=[("disabled", colors["background"]), ("active", colors["heading"])],
-            foreground=[("disabled", colors["muted"])],
-        )
-        self.style.configure("TCheckbutton", background=colors["background"], foreground=colors["text"])
-        self.style.map("TCheckbutton", background=[("active", colors["background"])])
-        self.style.configure(
-            "TEntry", fieldbackground=colors["field"], foreground=colors["text"],
-            bordercolor=colors["border"],
-        )
-        self.style.configure(
-            "TCombobox", fieldbackground=colors["field"], background=colors["panel"],
-            foreground=colors["text"], arrowcolor=colors["text"],
-            bordercolor=colors["border"],
-        )
-        self.style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", colors["field"])],
-            foreground=[("readonly", colors["text"])],
-            selectbackground=[("readonly", colors["field"])],
-            selectforeground=[("readonly", colors["text"])],
-        )
-        self.style.configure(
-            "Treeview", background=colors["field"], fieldbackground=colors["field"],
-            foreground=colors["text"], rowheight=27, bordercolor=colors["border"],
-        )
-        self.style.map(
-            "Treeview", background=[("selected", colors["selected"])],
-            foreground=[("selected", colors["text"])],
-        )
-        self.style.configure(
-            "Treeview.Heading", background=colors["heading"], foreground=colors["text"],
-            relief="flat", padding=(6, 6),
-        )
-        self.style.map("Treeview.Heading", background=[("active", colors["panel"])])
-        self.style.configure(
-            "Horizontal.TScale", background=colors["background"],
-            troughcolor=colors["trough"],
-        )
+        self.theme = theme if theme in PALETTES else "light"
+        self.style, self.colors = apply_base_theme(self.root, self.theme)
         self._configure_volume_slider_style()
         self._configure_scrollbar_styles()
 
     def _configure_scrollbar_styles(self) -> None:
-        """Use the selected slider color for both process-list scrollbars."""
-        for orientation in ("Vertical", "Horizontal"):
-            style_name = f"App.{orientation}.TScrollbar"
-            self.style.configure(
-                style_name,
-                background=self.slider_thumb_color,
-                troughcolor=self.colors["trough"],
-                bordercolor=self.colors["border"],
-                lightcolor=self.slider_thumb_color,
-                darkcolor=self.slider_thumb_color,
-                arrowcolor=self.slider_thumb_color,
-                relief="flat",
-            )
-            self.style.map(
-                style_name,
-                background=[
-                    ("active", self.slider_thumb_color),
-                    ("pressed", self.slider_thumb_color),
-                    ("disabled", self.slider_thumb_color),
-                ],
-            )
+        configure_scrollbars(self.style, self.colors, self.slider_thumb_color)
 
     def _configure_volume_slider_style(self) -> None:
-        """Use the same customizable, high-contrast slider in both themes."""
-        self.style.configure(
-            "Volume.Horizontal.TScale",
-            background=self.slider_thumb_color,
-            troughcolor=self.colors["trough"],
-            bordercolor=self.slider_thumb_color,
-            lightcolor=self.slider_thumb_color,
-            darkcolor=self.slider_thumb_color,
-            focuscolor=self.slider_thumb_color,
-            borderwidth=0,
-            sliderlength=22,
-            sliderthickness=16,
-            # A flat thumb avoids the light/dark bevel spots drawn by the
-            # classic raised style, making the slider look like a single solid fill.
-            sliderrelief="flat",
-        )
-        self.style.map(
-            "Volume.Horizontal.TScale",
-            background=[("active", self.slider_thumb_color), ("disabled", self.slider_thumb_color)],
-            relief=[("pressed", "flat"), ("active", "flat")],
-        )
+        configure_volume_slider(self.style, self.colors, self.slider_thumb_color)
 
     def _set_slider_thumb_color(self, color: str) -> None:
         """Update the visible slider; persistence is handled separately."""
