@@ -67,8 +67,7 @@ class FakePreferenceStore:
 
 def fake_startup(**overrides):
     functions = {
-        "is_startup_enabled": lambda: False,
-        "migrate_startup": lambda: None,
+        "check_startup": lambda: False,
         "set_startup_enabled": lambda _enabled: None,
     }
     functions.update(overrides)

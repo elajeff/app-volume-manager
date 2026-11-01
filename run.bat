@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
+if exist ".venv\Scripts\python.exe" goto :dependencies
+
 where py >nul 2>&1
 if errorlevel 1 (
     echo Python Launcher not found. Install Python 3.13 64-bit from https://www.python.org/downloads/windows/
@@ -23,17 +25,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist ".venv\Scripts\python.exe" (
-    echo Creating the project's virtual environment...
-    py -3.13 -m venv .venv
-    if errorlevel 1 goto :failed
-)
-
-rem pip leaves compatible installed versions alone and installs only missing or
-rem incompatible requirements. This also handles updates to requirements.txt.
-echo Checking App Volume Manager dependencies...
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
+echo Creating the project's virtual environment...
+py -3.13 -m venv .venv
 if errorlevel 1 goto :failed
+
+:dependencies
+rem Install only when requirements.txt differs from the copy saved after the
+rem last successful install. Delete .venv to force a clean reinstall.
+fc /b requirements.txt ".venv\requirements.installed" >nul 2>&1
+if errorlevel 1 (
+    echo Installing App Volume Manager dependencies...
+    ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
+    if errorlevel 1 goto :failed
+    copy /y requirements.txt ".venv\requirements.installed" >nul
+)
 
 if not exist ".venv\Scripts\pythonw.exe" (
     echo pythonw.exe was not found in the virtual environment. Try run-console.bat for details.

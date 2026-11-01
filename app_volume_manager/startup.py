@@ -10,6 +10,9 @@ from pathlib import Path
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 APP_VALUE_NAME = "AppVolumeManager"
+# Task Scheduler's default priority (7) starts the app below normal CPU and
+# I/O priority. 5 is the normal priority class.
+TASK_PRIORITY = 5
 
 # Use Windows' native task commands instead of comtypes' dynamic IDispatch
 # wrapper, which can lose the underlying error when a scheduler call fails.
@@ -27,25 +30,28 @@ try {
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-            -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+            -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -Priority $request.priority
         Register-ScheduledTask -TaskName $request.name -TaskPath '\' -Action $action `
             -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     } else {
-        $task = Get-ScheduledTask -TaskPath '\' | Where-Object { $_.TaskName -eq $request.name }
+        $task = Get-ScheduledTask -TaskPath '\' -TaskName $request.name -ErrorAction SilentlyContinue
         if ($request.operation -eq 'disable') {
             if ($null -ne $task) { $task | Unregister-ScheduledTask -Confirm:$false }
         } else {
-            $enabled = $false
+            $state = 'false'
             if ($null -ne $task) {
                 $actions = @($task.Actions)
                 $triggers = @($task.Triggers | Where-Object {
                     $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled
                 })
-                $enabled = [string]$task.State -ne 'Disabled' -and $actions.Count -eq 1 `
-                    -and $actions[0].Execute -eq $request.executable `
-                    -and $actions[0].Arguments -eq $request.arguments -and $triggers.Count -gt 0
+                if ([string]$task.State -ne 'Disabled' -and $actions.Count -eq 1 `
+                        -and $actions[0].Execute -eq $request.executable `
+                        -and $actions[0].Arguments -eq $request.arguments -and $triggers.Count -gt 0) {
+                    $state = if ($task.Settings.Priority -eq $request.priority) { 'true' } else { 'outdated' }
+                }
             }
-            Write-Output $enabled.ToString().ToLowerInvariant()
+            Write-Output $state
         }
     }
 } catch {
@@ -82,6 +88,7 @@ def _run_task_command(operation: str) -> str:
     request = json.dumps({
         "operation": operation, "name": _task_name(),
         "executable": executable, "arguments": arguments, "directory": directory,
+        "priority": TASK_PRIORITY,
     })
     # Encoding keeps paths with quotes, spaces, or non-ASCII characters out of
     # PowerShell source syntax. No shell or execution-policy changes are needed.
@@ -129,7 +136,7 @@ def _remove_legacy() -> None:
 def is_startup_enabled() -> bool:
     if os.name != "nt":
         return False
-    return _run_task_command("query").casefold() == "true" or _legacy_enabled()
+    return _run_task_command("query") in {"true", "outdated"} or _legacy_enabled()
 
 
 def set_startup_enabled(enabled: bool) -> None:
@@ -140,7 +147,18 @@ def set_startup_enabled(enabled: bool) -> None:
     _remove_legacy()
 
 
-def migrate_startup() -> None:
-    """Upgrade an enabled legacy entry without enabling startup for other users."""
-    if os.name == "nt" and _legacy_enabled():
+def check_startup() -> bool:
+    """Report whether startup is enabled, upgrading older registrations on the way.
+
+    An enabled Run entry from earlier versions is replaced by the sign-in task,
+    and a task registered with outdated settings is registered again.
+    """
+    if os.name != "nt":
+        return False
+    if _legacy_enabled():
         set_startup_enabled(True)
+        return True
+    state = _run_task_command("query")
+    if state == "outdated":
+        _run_task_command("enable")
+    return state in {"true", "outdated"}

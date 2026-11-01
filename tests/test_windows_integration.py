@@ -40,6 +40,15 @@ class WindowsIntegrationTests(unittest.TestCase):
                 self.assertFalse(startup.is_startup_enabled())
                 startup.set_startup_enabled(True)
                 self.assertTrue(startup.is_startup_enabled())
+                self.assertEqual(startup._run_task_command("query"), "true")
+
+                # A task registered by an older version at Task Scheduler's
+                # default priority is reported as outdated and registered again.
+                with patch.object(startup, "TASK_PRIORITY", 7):
+                    startup.set_startup_enabled(True)
+                self.assertEqual(startup._run_task_command("query"), "outdated")
+                self.assertTrue(startup.check_startup())
+                self.assertEqual(startup._run_task_command("query"), "true")
             finally:
                 startup.set_startup_enabled(False)
             self.assertFalse(startup.is_startup_enabled())

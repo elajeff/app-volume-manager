@@ -36,7 +36,7 @@ from app_volume_manager.ui.windows_shell import destroy_icon, set_window_icon
 from app_volume_manager.volume_service import VolumeRuleEngine
 
 AUDIO_EVENT_CHECK_MS = 100
-DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
+STARTUP_CHECK_DELAY_MS = 60_000
 
 
 def resource_path(relative_path: str) -> Path:
@@ -70,7 +70,7 @@ class VolumeManagerApp:
         self._tray_factory = tray_factory
         self._startup = startup
         self.theme = "light"
-        self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
+        self.slider_thumb_color = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
         self._native_icon_handle = None
         self.backend = backend if backend is not None else WindowsAudioBackend()
         self.engine = engine if engine is not None else VolumeRuleEngine()
@@ -92,6 +92,8 @@ class VolumeManagerApp:
         self._audio_event_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._startup_busy = False
         self._startup_enabled = False
+        self._startup_checked = False
+        self._startup_check_after_id = None
         self._startup_results: queue.SimpleQueue = queue.SimpleQueue()
 
         self.root.title(APP_NAME)
@@ -133,19 +135,23 @@ class VolumeManagerApp:
         except SettingsError as exc:
             startup_errors.append(str(exc))
             self.theme = "light"
-            self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
+            self.slider_thumb_color = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
 
         self._set_window_icon()
         self._apply_theme(self.theme)
         self._build_ui()
-
-        self._start_startup_update(None)
 
         self._start_tray_icon()
         if start_minimized and self.tray_icon is not None:
             self.window_visible = False
         elif start_minimized:
             self.root.deiconify()  # Keep the app reachable if tray setup fails.
+        # Checking the sign-in task starts PowerShell. A hidden launch at sign-in
+        # doesn't need the answer yet, so it waits instead of slowing the sign-in.
+        if self.window_visible:
+            self._check_startup_once()
+        else:
+            self._startup_check_after_id = self.root.after(STARTUP_CHECK_DELAY_MS, self._check_startup_once)
         self._audio_event_after_id = self.root.after(
             AUDIO_EVENT_CHECK_MS, self._process_audio_events
         )
@@ -163,6 +169,7 @@ class VolumeManagerApp:
         except (OSError, tk.TclError):
             pass
         try:
+            # Keep a reference: Tk drops the image when the PhotoImage is garbage collected.
             self.window_icon = tk.PhotoImage(file=str(resource_path("assets/app-icon.png")))
             self.root.iconphoto(True, self.window_icon)
         except (OSError, tk.TclError):
@@ -268,7 +275,6 @@ class VolumeManagerApp:
         self.process_table = ProcessTable(outer, self._on_table_click)
         self.process_table.frame.grid(row=3, column=0, sticky="nsew")
         self.table = self.process_table.tree
-        self.table_frame = self.process_table.frame
 
         volume_frame = ttk.Frame(outer)
         volume_frame.grid(row=4, column=0, sticky="ew", pady=(10, 4))
@@ -382,6 +388,7 @@ class VolumeManagerApp:
         self.root.deiconify()
         self.root.lift()
         self.window_visible = True
+        self._check_startup_once()
         self._scan_sessions(update_table=True)
         self._reschedule_poll()
         try:
@@ -584,6 +591,12 @@ class VolumeManagerApp:
             "Starts when you sign in" if self.startup_var.get() else "Not enabled"
         )
 
+    def _check_startup_once(self) -> None:
+        if self._startup_checked or self._closing:
+            return
+        self._startup_checked = True
+        self._start_startup_update(None)
+
     def change_startup(self) -> None:
         self._start_startup_update(bool(self.startup_var.get()))
 
@@ -597,8 +610,7 @@ class VolumeManagerApp:
         def update() -> None:
             try:
                 if requested is None:
-                    self._startup.migrate_startup()
-                    enabled = self._startup.is_startup_enabled()
+                    enabled = self._startup.check_startup()
                 else:
                     self._startup.set_startup_enabled(requested)
                     enabled = requested
@@ -785,7 +797,7 @@ class VolumeManagerApp:
         if self._closing:
             return
         self._closing = True
-        for callback_id in (self._poll_after_id, self._audio_event_after_id):
+        for callback_id in (self._poll_after_id, self._audio_event_after_id, self._startup_check_after_id):
             if callback_id is not None:
                 self.root.after_cancel(callback_id)
         self.audio_monitor.stop()

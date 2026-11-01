@@ -91,6 +91,19 @@ class SingleInstanceTests(unittest.TestCase):
 
 
 class StartupWorkerTests(unittest.TestCase):
+    def test_hidden_sign_in_launch_checks_the_task_only_later(self):
+        check = Mock(return_value=True)
+        app = open_window(self, start_minimized=True, startup=fake_startup(check_startup=check))
+        self.assertFalse(app._startup_checked)
+        self.assertIsNotNone(app._startup_check_after_id)
+        app.show_window()  # Opening the window early runs the check right away.
+        self.wait_for_result(app)
+        app._process_startup_results()
+        check.assert_called_once_with()
+        self.assertTrue(app.startup_var.get())
+        app.show_window()
+        self.assertEqual(check.call_count, 1)
+
     def wait_for_result(self, app):
         deadline = time.monotonic() + 2
         while app._startup_results.empty():

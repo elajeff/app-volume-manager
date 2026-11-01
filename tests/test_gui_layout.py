@@ -23,9 +23,9 @@ class ProcessTableLayoutTests(unittest.TestCase):
         ])
         app.root.update_idletasks()
 
-        self.assertIs(app.table.master, app.table_frame)
+        self.assertIs(app.table.master, app.process_table.frame)
         self.assertEqual(app.table.winfo_manager(), "grid")
-        self.assertEqual(app.table_frame.winfo_manager(), "grid")
+        self.assertEqual(app.process_table.frame.winfo_manager(), "grid")
         rows = app.table.get_children()
         self.assertEqual(len(rows), 1)
         values = app.table.item(rows[0], "values")
