@@ -97,15 +97,22 @@ def show_slider_color_dialog(
     palette_locked = False
     hue_locked = False
 
+    saturations = [x / (palette_width - 1) for x in range(palette_width)]
+
     def draw_palette(hue: float) -> None:
+        # This runs on every hue change, so it skips hsv_to_hex()'s validation
+        # and hands Tk the whole image in one call.
         nonlocal rendered_hue
+        hsv_to_rgb = colorsys.hsv_to_rgb
+        rows = []
         for y in range(palette_height):
             value = 1.0 - y / (palette_height - 1)
-            row_colors = [
-                hsv_to_hex(hue, x / (palette_width - 1), value)
-                for x in range(palette_width)
-            ]
-            palette_photo.put("{" + " ".join(row_colors) + "}", to=(0, y))
+            cells = []
+            for saturation in saturations:
+                red, green, blue = hsv_to_rgb(hue, saturation, value)
+                cells.append(f"#{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}")
+            rows.append("{" + " ".join(cells) + "}")
+        palette_photo.put(" ".join(rows))
         rendered_hue = hue
 
     def draw_hue_strip() -> None:
