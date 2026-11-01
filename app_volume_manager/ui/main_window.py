@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 
 import psutil
 
+from app_volume_manager import startup as windows_startup
 from app_volume_manager.audio_backend import AudioBackendError, WindowsAudioBackend
 from app_volume_manager.audio_monitor import DEVICES_CHANGED, AudioSessionMonitor, refresh_interval_ms
 from app_volume_manager.color_utils import normalize_hex_color
@@ -24,7 +25,6 @@ from app_volume_manager.selection import (
 )
 from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore
 from app_volume_manager.single_instance import SingleInstance
-from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
 from app_volume_manager.ui import APP_NAME
 from app_volume_manager.ui.process_table import ProcessTable
 from app_volume_manager.ui.rule_dialog import show_rule_dialog
@@ -46,18 +46,34 @@ def resource_path(relative_path: str) -> Path:
 
 
 class VolumeManagerApp:
-    def __init__(self, root: tk.Tk, instance: SingleInstance, start_minimized: bool = False) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        instance: SingleInstance,
+        start_minimized: bool = False,
+        *,
+        backend=None,
+        engine=None,
+        store=None,
+        preference_store=None,
+        monitor_factory=AudioSessionMonitor,
+        tray_factory=start_tray_icon,
+        startup=windows_startup,
+    ) -> None:
+        """Build the window. The keyword arguments replace the Windows-facing parts in tests."""
         self.root = root
         self.instance_guard = instance
         if start_minimized:
             self.root.withdraw()
-        self.store = SettingsStore()
-        self.preference_store = PreferenceStore()
+        self.store = store if store is not None else SettingsStore()
+        self.preference_store = preference_store if preference_store is not None else PreferenceStore()
+        self._tray_factory = tray_factory
+        self._startup = startup
         self.theme = "light"
         self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
         self._native_icon_handle = None
-        self.backend = WindowsAudioBackend()
-        self.engine = VolumeRuleEngine()
+        self.backend = backend if backend is not None else WindowsAudioBackend()
+        self.engine = engine if engine is not None else VolumeRuleEngine()
         self.rules: list[AppRule] = []
         self.last_sessions = []
         self.checked_rows: set[str] = set()
@@ -98,7 +114,7 @@ class VolumeManagerApp:
             self.audio_ready = True
         except AudioBackendError as exc:
             startup_errors.append(str(exc))
-        self.audio_monitor = AudioSessionMonitor(
+        self.audio_monitor = monitor_factory(
             wrap_session=self.backend.wrap_notified_session,
             on_session_created=self._apply_notified_session,
             on_change=self._queue_audio_event,
@@ -341,7 +357,7 @@ class VolumeManagerApp:
 
     def _start_tray_icon(self) -> None:
         try:
-            self.tray_icon = start_tray_icon(
+            self.tray_icon = self._tray_factory(
                 APP_NAME,
                 resource_path("assets/app-icon.png"),
                 self._tray_show,
@@ -581,10 +597,10 @@ class VolumeManagerApp:
         def update() -> None:
             try:
                 if requested is None:
-                    migrate_startup()
-                    enabled = is_startup_enabled()
+                    self._startup.migrate_startup()
+                    enabled = self._startup.is_startup_enabled()
                 else:
-                    set_startup_enabled(requested)
+                    self._startup.set_startup_enabled(requested)
                     enabled = requested
                 self._startup_results.put((enabled, None))
             except Exception as exc:

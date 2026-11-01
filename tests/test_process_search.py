@@ -1,13 +1,11 @@
 """Regression checks for process search, selection, and list scrollbars."""
 
-import tkinter as tk
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app_volume_manager.selection import TemporaryTargets
-from app_volume_manager.ui.main_window import DEFAULT_SLIDER_THUMB_COLOR, VolumeManagerApp
 from app_volume_manager.volume_service import AudioSession
+from tests.support import open_window
 
 
 class ProcessSearchTests(unittest.TestCase):
@@ -24,25 +22,15 @@ class ProcessSearchTests(unittest.TestCase):
                 process_role="Main process", session_name="Music", device_name="Headphones",
             ),
         ]
-        try:
-            self.root = tk.Tk()
-        except tk.TclError as exc:
-            self.skipTest(f"Tk display is not available in this environment: {exc}")
-        self.addCleanup(self.root.destroy)
+        self.app = open_window(self, sessions=self.sessions)
+        self.root = self.app.root
         self.root.geometry("900x460")
-        self.app = VolumeManagerApp.__new__(VolumeManagerApp)
-        self.app.root = self.root
-        self.app.last_sessions = self.sessions
-        self.app.rules = []
-        self.app.checked_rows = set()
-        self.app._row_info = {}
-        self.app._all_row_info = {}
-        self.app.temporary = TemporaryTargets()
-        self.app.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
-        self.app._apply_theme("light")
-        self.app._build_ui()
         self.root.update_idletasks()
         self.root.update()
+
+    def set_sessions(self, sessions):
+        self.app.backend.sessions = list(sessions)
+        self.app._scan_sessions()
 
     def test_search_matches_executable_pid_and_device_case_insensitively(self):
         self.app.search_var.set("DISCORD 4242")
@@ -85,19 +73,17 @@ class ProcessSearchTests(unittest.TestCase):
 
     def test_vertical_scrollbar_appears_only_when_the_list_overflows(self):
         self.assertFalse(self.app.process_table.vertical_scrollbar.winfo_ismapped())
-        self.app.last_sessions = [
+        self.set_sessions(
             AudioSession(
                 f"app{index}.exe", f"session-{index}", lambda _value: None,
                 process_id=1000 + index, current_volume=40,
                 process_signature=f"app{index}.exe|main", process_role="Main process",
             )
             for index in range(10)
-        ]
-        self.app._refresh_table()
+        )
         self.root.update_idletasks()
         self.root.update()
         self.assertTrue(self.app.process_table.vertical_scrollbar.winfo_ismapped())
-
 
     def discord_row_id(self):
         return next(row_id for row_id, row in self.app._all_row_info.items() if row.executable == "Discord.exe")
@@ -134,12 +120,10 @@ class ProcessSearchTests(unittest.TestCase):
     def test_rows_appearing_or_leaving_rebuild_the_table_and_keep_a_surviving_selection(self):
         spotify_id = next(row_id for row_id, row in self.app._all_row_info.items() if row.executable == "Spotify.exe")
         self.app.table.selection_set(spotify_id)
-        self.app.last_sessions = self.sessions[1:]
-        self.app._refresh_table()
+        self.set_sessions(self.sessions[1:])
         self.assertEqual(self.app.table.get_children(), (spotify_id,))
         self.assertEqual(self.app.table.selection(), (spotify_id,))
-        self.app.last_sessions = []
-        self.app._refresh_table()
+        self.set_sessions([])
         self.assertEqual(self.app.table.get_children(), ("no-audio-sessions",))
 
 

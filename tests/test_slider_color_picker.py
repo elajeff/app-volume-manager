@@ -4,7 +4,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 
-from app_volume_manager.ui.main_window import VolumeManagerApp
+from tests.support import FakePreferenceStore, open_window
 
 
 def descendants(widget):
@@ -15,23 +15,8 @@ def descendants(widget):
 
 class SliderColorPickerInteractionTests(unittest.TestCase):
     def test_palette_and_hue_clicks_stay_fixed_until_pointer_leaves(self):
-        try:
-            root = tk.Tk()
-        except tk.TclError as exc:
-            self.skipTest(f"Tk display is not available in this environment: {exc}")
-
-        app = VolumeManagerApp.__new__(VolumeManagerApp)
-        app.root = root
-        app.slider_thumb_color = "#1677FF"
-        app.status_var = tk.StringVar(master=root)
-        applied_colors = []
-
-        def set_color(color):
-            app.slider_thumb_color = color
-            applied_colors.append(color)
-
-        app._set_slider_thumb_color = set_color
-        app.preference_store = object()
+        app = open_window(self)
+        root = app.root
         callback_errors = []
 
         def exercise_picker():
@@ -76,35 +61,15 @@ class SliderColorPickerInteractionTests(unittest.TestCase):
                     if isinstance(child, tk.Toplevel):
                         child.destroy()
 
-        try:
-            root.after(150, exercise_picker)
-            app.edit_slider_thumb_color()
-            if callback_errors:
-                raise callback_errors[0]
-        finally:
-            root.destroy()
+        root.after(150, exercise_picker)
+        app.edit_slider_thumb_color()
+        if callback_errors:
+            raise callback_errors[0]
 
     def test_reset_to_default_previews_and_saves_blue(self):
-        try:
-            root = tk.Tk()
-        except tk.TclError as exc:
-            self.skipTest(f"Tk display is not available in this environment: {exc}")
-
-        app = VolumeManagerApp.__new__(VolumeManagerApp)
-        app.root = root
-        app.slider_thumb_color = "#AB12CD"
-        app.status_var = tk.StringVar(master=root)
-        saved_colors = []
-
-        def set_color(color):
-            app.slider_thumb_color = color
-
-        class FakePreferenceStore:
-            def save_slider_thumb_color(self, color):
-                saved_colors.append(color)
-
-        app._set_slider_thumb_color = set_color
-        app.preference_store = FakePreferenceStore()
+        app = open_window(self, preference_store=FakePreferenceStore(color="#AB12CD"))
+        root = app.root
+        saved_colors = app.preference_store.saved_colors
         callback_errors = []
 
         def reset_and_save():
@@ -128,15 +93,12 @@ class SliderColorPickerInteractionTests(unittest.TestCase):
                     if isinstance(child, tk.Toplevel):
                         child.destroy()
 
-        try:
-            root.after(150, reset_and_save)
-            app.edit_slider_thumb_color()
-            if callback_errors:
-                raise callback_errors[0]
-            self.assertEqual(saved_colors, ["#1677FF"])
-            self.assertIn("saved", app.status_var.get().casefold())
-        finally:
-            root.destroy()
+        root.after(150, reset_and_save)
+        app.edit_slider_thumb_color()
+        if callback_errors:
+            raise callback_errors[0]
+        self.assertEqual(saved_colors, ["#1677FF"])
+        self.assertIn("saved", app.status_var.get().casefold())
 
 
 if __name__ == "__main__":
