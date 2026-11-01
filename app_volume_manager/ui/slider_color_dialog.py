@@ -14,8 +14,6 @@ from app_volume_manager.color_utils import (
 from app_volume_manager.settings import PreferenceStore, SettingsError
 from app_volume_manager.ui import APP_NAME
 
-DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
-
 
 def show_slider_color_dialog(
     parent: tk.Misc,
@@ -92,9 +90,6 @@ def show_slider_color_dialog(
     hue_photo = tk.PhotoImage(master=dialog, width=hue_width, height=palette_height)
     palette_canvas.create_image(0, 0, image=palette_photo, anchor="nw")
     hue_canvas.create_image(0, 0, image=hue_photo, anchor="nw")
-    # Keep explicit references while the modal dialog is open.
-    dialog.palette_photo = palette_photo
-    dialog.hue_photo = hue_photo
     rendered_hue = -1.0
     # Hover previews are convenient, but once a user clicks a point, keep
     # that choice fixed while they move the pointer away to Save. Leaving
@@ -336,7 +331,7 @@ def show_slider_color_dialog(
         active_editor = None
         palette_locked = False
         hue_locked = False
-        update_preview(DEFAULT_SLIDER_THUMB_COLOR, recalculate_hsv=True)
+        update_preview(PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR, recalculate_hsv=True)
 
     ttk.Button(
         buttons, text="Reset to default", command=reset_to_default
@@ -347,4 +342,3 @@ def show_slider_color_dialog(
     dialog.bind("<Return>", lambda _event: save())
     dialog.grab_set()
     parent.wait_window(dialog)
-

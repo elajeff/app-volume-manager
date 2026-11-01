@@ -27,7 +27,6 @@ class AudioSession:
 
 @dataclass(frozen=True)
 class ScanResult:
-    session_count: int
     applied_count: int
     errors: tuple[str, ...]
 
@@ -70,9 +69,8 @@ class VolumeRuleEngine:
         app_rules, process_rules = split_rules(rules)
         applied = 0
         errors: list[str] = []
-        session_list = list(sessions)
 
-        for session in session_list:
+        for session in sessions:
             target = self._target_for_session(session, app_rules, process_rules, temporary_targets)
             if target is None:
                 continue
@@ -86,8 +84,4 @@ class VolumeRuleEngine:
             except Exception as exc:
                 errors.append(f"{session.executable} (session {session.session_id}): {exc}")
 
-        return ScanResult(
-            session_count=len(session_list),
-            applied_count=applied,
-            errors=tuple(errors),
-        )
+        return ScanResult(applied_count=applied, errors=tuple(errors))

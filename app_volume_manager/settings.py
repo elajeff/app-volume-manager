@@ -154,4 +154,3 @@ class PreferenceStore:
         data = self._read_preferences()
         data["slider_thumb_color"] = color
         _write_json_atomically(self.path, data, "preferences")
-
