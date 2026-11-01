@@ -55,6 +55,8 @@ py -3.13 -m unittest discover -s tests -v
 
 Tests cover volume-rule application, process targeting, session monitoring, settings persistence, search and selection, and key GUI interactions. They use simulated sessions and do not change real Windows audio settings; GUI tests are skipped where a display is unavailable. Core Audio timing and device behavior still need testing on Windows.
 
+The same tests run on GitHub Actions for every push and pull request. To lint locally, install `requirements-dev.txt` and run `ruff check .`.
+
 ## Build a Windows executable
 
 Install Python 3.13 64-bit, then double-click `build-windows.bat`. The script runs the tests and creates:
