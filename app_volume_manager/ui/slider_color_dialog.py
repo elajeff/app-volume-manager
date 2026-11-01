@@ -12,8 +12,8 @@ from app_volume_manager.color_utils import (
     rgb_to_hex,
 )
 from app_volume_manager.settings import PreferenceStore, SettingsError
+from app_volume_manager.ui import APP_NAME
 
-APP_NAME = "App Volume Manager"
 DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
 
 

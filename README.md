@@ -69,7 +69,9 @@ Keep the full **App Volume Manager** folder together when distributing it manual
 ## Project structure
 
 - `app.py` — application controller, process table, search, tray integration, and user actions.
-- `app_volume_manager/color_utils.py` and `slider_color_dialog.py` — validated color conversion and the self-contained slider color editor.
+- `app_volume_manager/color_utils.py` — validated color conversion.
+- `app_volume_manager/ui/slider_color_dialog.py` and `rule_dialog.py` — the slider color editor and the Add rule dialog.
+- `app_volume_manager/ui/volume_scale.py` — rounding and click handling shared by the volume sliders.
 - `app_volume_manager/ui/theme.py` — light and dark palettes and the ttk styles.
 - `app_volume_manager/ui/tray.py` — the system tray icon and its menu.
 - `app_volume_manager/ui/windows_shell.py` — taskbar identity and native window icon calls.

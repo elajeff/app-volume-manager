@@ -9,7 +9,7 @@ import threading
 import tkinter as tk
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 import psutil
 
@@ -27,29 +27,24 @@ from app_volume_manager.selection import (
 )
 from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore, default_settings_path
 from app_volume_manager.single_instance import SingleInstance
-from app_volume_manager.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
+from app_volume_manager.ui import APP_NAME
+from app_volume_manager.ui.rule_dialog import show_rule_dialog
+from app_volume_manager.ui.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.ui.theme import PALETTES, apply_base_theme, configure_scrollbars, configure_volume_slider
 from app_volume_manager.ui.tray import start_tray_icon
+from app_volume_manager.ui.volume_scale import allow_scale_thumb_click, percent
 from app_volume_manager.ui.windows_shell import destroy_icon, set_app_user_model_id, set_window_icon
 from app_volume_manager.volume_service import VolumeRuleEngine
 
-APP_NAME = "App Volume Manager"
 AUDIO_EVENT_CHECK_MS = 100
 DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
-
-
 
 
 def resource_path(relative_path: str) -> Path:
     """Find bundled resources both from source and from a PyInstaller build."""
     bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return bundle_root / relative_path
-
-
-def percent(value) -> int:
-    """Round a slider value to a whole percentage from 0 to 100."""
-    return max(0, min(100, int(float(value) + 0.5)))
 
 
 def configure_logging() -> None:
@@ -59,22 +54,6 @@ def configure_logging() -> None:
     handler = RotatingFileHandler(log_path, maxBytes=200_000, backupCount=1, encoding="utf-8", delay=True)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.basicConfig(level=logging.WARNING, handlers=[handler])
-
-
-def allow_scale_thumb_click(event) -> str | None:
-    """Allow mouse interaction only when the pointer is on the scale thumb.
-
-    Returning ``break`` for clicks on the trough prevents ttk.Scale's default
-    behavior of jumping to the clicked position. Native arrow-key handling is
-    unaffected, and clicks/drags that begin on the thumb keep the default binding.
-    """
-    try:
-        element = str(event.widget.identify(event.x, event.y)).casefold()
-    except (AttributeError, tk.TclError):
-        return "break"
-    if "slider" in element or "thumb" in element:
-        return None
-    return "break"
 
 
 class VolumeManagerApp:
@@ -672,99 +651,21 @@ class VolumeManagerApp:
         )
 
     def add_rule(self) -> None:
-        self._rule_dialog()
-
-    def _rule_dialog(self) -> None:
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Add application rule")
-        dialog.transient(self.root)
-        dialog.resizable(False, False)
-        frame = ttk.Frame(dialog, padding=16)
-        frame.pack(fill="both", expand=True)
-
-        ttk.Label(frame, text="Executable name. This rule applies to every process using this executable.").grid(
-            row=0, column=0, columnspan=2, sticky="w"
-        )
-        name_var = tk.StringVar(value="")
-        name_entry = ttk.Entry(frame, textvariable=name_var, width=38)
-        name_entry.grid(row=1, column=0, sticky="ew", pady=(4, 4))
-        ttk.Button(
-            frame, text="Browse…", command=lambda: self._browse_executable(name_var)
-        ).grid(row=1, column=1, padx=(6, 0), pady=(4, 4))
-
-        available_names = sorted({session.executable for session in self.last_sessions}, key=str.casefold)
-        ttk.Label(frame, text="Or choose a detected executable").grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
-        )
-        detected_var = tk.StringVar(value="")
-        detected = ttk.Combobox(frame, textvariable=detected_var, values=available_names, width=35, state="readonly")
-        detected.grid(row=3, column=0, sticky="ew", pady=(4, 4))
-        detected.bind("<<ComboboxSelected>>", lambda _event: name_var.set(detected_var.get()))
-
-        volume_var = tk.DoubleVar(value=int(self.target_volume_var.get()))
-        volume_label_var = tk.StringVar(value=f"Target volume: {int(volume_var.get())}%")
-        ttk.Label(frame, textvariable=volume_label_var).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(10, 0)
-        )
-        scale = ttk.Scale(
-            frame,
-            from_=0,
-            to=100,
-            orient="horizontal",
-            length=330,
-            variable=volume_var,
-            command=lambda value: self._update_volume_label(volume_var, volume_label_var, value),
-            takefocus=True,
-            style="Volume.Horizontal.TScale",
-        )
-        scale.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 8))
-        scale.bind("<Button-1>", allow_scale_thumb_click)
-        enabled_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame, text="Apply this rule automatically", variable=enabled_var).grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(2, 8)
+        show_rule_dialog(
+            self.root,
+            sorted({session.executable for session in self.last_sessions}, key=str.casefold),
+            int(self.target_volume_var.get()),
+            self._save_app_rule,
         )
 
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(8, 0))
-        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(6, 0))
-
-        def save() -> None:
-            try:
-                new_rule = AppRule(name_var.get(), percent(volume_var.get()), enabled_var.get())
-                new_rules = [rule for rule in self.rules if rule.key != new_rule.key]
-                new_rules.append(new_rule)
-                new_rules.sort(key=lambda rule: rule.executable.casefold())
-                self.store.save_rules(new_rules)
-                self.rules = new_rules
-                self._scan_sessions(force=True)
-                self.status_var.set(
-                    f"Saved {new_rule.executable}; waiting for its audio session if it isn't active."
-                )
-                dialog.destroy()
-            except (ValueError, SettingsError) as exc:
-                messagebox.showerror(APP_NAME, str(exc), parent=dialog)
-
-        ttk.Button(buttons, text="Save rule", command=save).pack(side="right")
-        name_entry.focus_set()
-        dialog.bind("<Return>", lambda _event: save())
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        dialog.grab_set()
-        self.root.wait_window(dialog)
-
-    @staticmethod
-    def _update_volume_label(variable: tk.DoubleVar, label: tk.StringVar, value: str) -> None:
-        volume = percent(value)
-        variable.set(volume)
-        label.set(f"Target volume: {volume}%")
-
-    @staticmethod
-    def _browse_executable(name_var: tk.StringVar) -> None:
-        path = filedialog.askopenfilename(
-            title="Choose application executable",
-            filetypes=[("Windows applications", "*.exe"), ("All files", "*.*")],
-        )
-        if path:
-            name_var.set(Path(path).name)
+    def _save_app_rule(self, rule: AppRule) -> None:
+        new_rules = [existing for existing in self.rules if existing.key != rule.key]
+        new_rules.append(rule)
+        new_rules.sort(key=lambda existing: existing.executable.casefold())
+        self.store.save_rules(new_rules)
+        self.rules = new_rules
+        self._scan_sessions(force=True)
+        self.status_var.set(f"Saved {rule.executable}; waiting for its audio session if it isn't active.")
 
     def _update_startup_status(self) -> None:
         self.startup_status_var.set(
