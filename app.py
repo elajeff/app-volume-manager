@@ -1,7 +1,6 @@
 """Windows per-application volume manager."""
 
 import argparse
-import ctypes
 import logging
 import os
 import queue
@@ -30,10 +29,10 @@ from app_volume_manager.settings import PreferenceStore, SettingsError, Settings
 from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
+from app_volume_manager.ui.windows_shell import destroy_icon, set_app_user_model_id, set_window_icon
 from app_volume_manager.volume_service import VolumeRuleEngine
 
 APP_NAME = "App Volume Manager"
-APP_USER_MODEL_ID = "AppVolumeManager.Desktop"
 AUDIO_EVENT_CHECK_MS = 100
 DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
 
@@ -57,20 +56,6 @@ def resource_path(relative_path: str) -> Path:
     """Find bundled resources both from source and from a PyInstaller build."""
     bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return bundle_root / relative_path
-
-
-def set_windows_app_identity() -> None:
-    """Give the source-run app its own Windows taskbar identity instead of Python's."""
-    if sys.platform != "win32":
-        return
-    try:
-        setter = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
-        setter.argtypes = [ctypes.c_wchar_p]
-        setter.restype = ctypes.c_long
-        setter(APP_USER_MODEL_ID)
-    except (AttributeError, OSError):
-        # The explicit window icon below still provides a fallback.
-        pass
 
 
 def percent(value) -> int:
@@ -216,23 +201,7 @@ class VolumeManagerApp:
         if sys.platform == "win32":
             try:
                 self.root.update_idletasks()
-                user32 = ctypes.windll.user32
-                user32.LoadImageW.argtypes = [
-                    ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
-                    ctypes.c_int, ctypes.c_int, ctypes.c_uint,
-                ]
-                user32.LoadImageW.restype = ctypes.c_void_p
-                handle = user32.LoadImageW(None, str(icon_path), 1, 0, 0, 0x0010)
-                if handle:
-                    user32.SendMessageW.argtypes = [
-                        ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p,
-                    ]
-                    user32.SendMessageW.restype = ctypes.c_ssize_t
-                    hwnd = ctypes.c_void_p(self.root.winfo_id())
-                    icon_handle = ctypes.c_void_p(handle)
-                    user32.SendMessageW(hwnd, 0x0080, ctypes.c_void_p(0), icon_handle)  # ICON_SMALL
-                    user32.SendMessageW(hwnd, 0x0080, ctypes.c_void_p(1), icon_handle)  # ICON_BIG
-                    self._native_icon_handle = int(handle)
+                self._native_icon_handle = set_window_icon(self.root.winfo_id(), icon_path)
             except (AttributeError, OSError, tk.TclError):
                 # Tk's own icon APIs remain as a fallback.
                 pass
@@ -1141,15 +1110,10 @@ class VolumeManagerApp:
                 pass
         self.backend.shutdown()
         self.root.destroy()
-        if self._native_icon_handle and sys.platform == "win32":
-            try:
-                destroy_icon = ctypes.windll.user32.DestroyIcon
-                destroy_icon.argtypes = [ctypes.c_void_p]
-                destroy_icon.restype = ctypes.c_int
-                destroy_icon(ctypes.c_void_p(self._native_icon_handle))
-            except (AttributeError, OSError):
-                pass
+        if self._native_icon_handle:
+            destroy_icon(self._native_icon_handle)
             self._native_icon_handle = None
+
 
 
 def main() -> int:
@@ -1164,7 +1128,7 @@ def main() -> int:
         if not instance.acquire(show_existing=not args.minimized):
             return 0
         configure_logging()
-        set_windows_app_identity()
+        set_app_user_model_id()
         root = tk.Tk()
         VolumeManagerApp(root, instance, start_minimized=args.minimized)
         root.mainloop()
