@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from app_volume_manager.rules import AppRule, normalize_executable_name, resolve_rule
+from app_volume_manager.rules import AppRule, normalize_executable_name, resolve_rule, split_rules
 
 
 @dataclass
@@ -28,28 +28,12 @@ class AudioSession:
 @dataclass(frozen=True)
 class ScanResult:
     session_count: int
-    matched_applications: frozenset[str]
     applied_count: int
     errors: tuple[str, ...]
 
 
 class VolumeRuleEngine:
     """Prefer specific process-role rules, then fall back to app-wide rules."""
-
-    @staticmethod
-    def _prepare_rules(rules: Iterable[AppRule]):
-        rule_list = list(rules)
-        app_rules = {
-            rule.executable.casefold(): rule
-            for rule in rule_list
-            if not rule.is_process_specific
-        }
-        process_rules = {
-            rule.process_signature: rule
-            for rule in rule_list
-            if rule.is_process_specific
-        }
-        return app_rules, process_rules
 
     @staticmethod
     def _target_for_session(
@@ -83,8 +67,7 @@ class VolumeRuleEngine:
         force: bool = False,
         temporary_targets: dict[tuple[int, str], int] | None = None,
     ) -> ScanResult:
-        app_rules, process_rules = self._prepare_rules(rules)
-        matched: set[str] = set()
+        app_rules, process_rules = split_rules(rules)
         applied = 0
         errors: list[str] = []
         session_list = list(sessions)
@@ -94,7 +77,6 @@ class VolumeRuleEngine:
             if target is None:
                 continue
 
-            matched.add(session.executable)
             if not force and session.current_volume == target:
                 continue
             try:
@@ -106,7 +88,6 @@ class VolumeRuleEngine:
 
         return ScanResult(
             session_count=len(session_list),
-            matched_applications=frozenset(matched),
             applied_count=applied,
             errors=tuple(errors),
         )

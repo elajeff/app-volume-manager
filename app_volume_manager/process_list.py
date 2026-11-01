@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Iterable
 
-from app_volume_manager.rules import AppRule, resolve_rule
+from app_volume_manager.rules import AppRule, resolve_rule, split_rules
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -32,12 +32,7 @@ def build_process_rows(
     closed processes remain visible so saved rules are easy to find and change.
     """
     rule_list = list(rules)
-    app_rules = {rule.executable.casefold(): rule for rule in rule_list if not rule.is_process_specific}
-    process_rules = {
-        rule.process_signature: rule
-        for rule in rule_list
-        if rule.is_process_specific and rule.process_signature is not None
-    }
+    app_rules, process_rules = split_rules(rule_list)
 
     groups: dict[tuple[str, int | None, str], list[AudioSession]] = {}
     display_names: dict[tuple[str, int | None, str], str] = {}

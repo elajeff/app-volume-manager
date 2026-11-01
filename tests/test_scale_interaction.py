@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from app import VolumeManagerApp, allow_scale_thumb_click
 
@@ -34,8 +35,10 @@ class ScaleInteractionTests(unittest.TestCase):
 
         app = VolumeManagerApp.__new__(VolumeManagerApp)
         app.volume_scale = FakeVolumeScale()
+        app.target_volume_label = Mock()
+        app.target_volume_var = Mock(get=lambda: 50)
         app.checked_rows = set()
-        app._row_info = {"discord": object()}
+        app._all_row_info = {"discord": object()}
 
         app._sync_volume_scale_enabled()
         self.assertEqual(app.volume_scale.last_state, ["disabled"])

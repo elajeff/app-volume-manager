@@ -2,8 +2,10 @@
 
 import tkinter as tk
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from app import VolumeManagerApp
+from app import DEFAULT_SLIDER_THUMB_COLOR, VolumeManagerApp
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -34,7 +36,10 @@ class ProcessSearchTests(unittest.TestCase):
         self.app.checked_rows = set()
         self.app._row_info = {}
         self.app._all_row_info = {}
+        self.app._shown_rows = {}
         self.app.temporary_process_targets = {}
+        self.app.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
+        self.app._apply_theme("light")
         self.app._build_ui()
         self.root.update_idletasks()
         self.root.update()
@@ -92,6 +97,50 @@ class ProcessSearchTests(unittest.TestCase):
         self.root.update_idletasks()
         self.root.update()
         self.assertTrue(self.app.vertical_scrollbar.winfo_ismapped())
+
+
+    def discord_row_id(self):
+        return next(row_id for row_id, row in self.app._all_row_info.items() if row.executable == "Discord.exe")
+
+    def test_unchanged_refresh_does_not_touch_the_table(self):
+        with patch.object(self.app.table, "item") as item, patch.object(self.app.table, "delete") as delete:
+            self.app._refresh_table()
+        item.assert_not_called()
+        delete.assert_not_called()
+
+    def test_volume_change_updates_only_that_row_and_keeps_the_selection(self):
+        discord_id = self.discord_row_id()
+        self.app.table.selection_set(discord_id)
+        before = self.app.table.get_children()
+        self.sessions[0].current_volume = 80
+        self.app._refresh_table()
+        self.assertEqual(self.app.table.get_children(), before)
+        self.assertEqual(self.app.table.selection(), (discord_id,))
+        self.assertEqual(self.app.table.item(discord_id, "values")[5], "80%")
+
+    def test_clicking_a_row_flips_its_checkbox_in_place_and_highlights_it(self):
+        discord_id = self.discord_row_id()
+        x, y, _width, _height = self.app.table.bbox(discord_id, "application")
+        event = SimpleNamespace(x=x + 2, y=y + 2)
+        with patch.object(self.app.table, "delete") as delete:
+            self.assertEqual(self.app._on_table_click(event), "break")
+        delete.assert_not_called()
+        self.assertEqual(self.app.table.item(discord_id, "values")[0], "\u2611")
+        self.assertEqual(self.app.table.selection(), (discord_id,))
+        self.assertIn("1 selected", self.app.search_summary_var.get())
+        self.app._on_table_click(event)
+        self.assertEqual(self.app.table.item(discord_id, "values")[0], "\u2610")
+
+    def test_rows_appearing_or_leaving_rebuild_the_table_and_keep_a_surviving_selection(self):
+        spotify_id = next(row_id for row_id, row in self.app._all_row_info.items() if row.executable == "Spotify.exe")
+        self.app.table.selection_set(spotify_id)
+        self.app.last_sessions = self.sessions[1:]
+        self.app._refresh_table()
+        self.assertEqual(self.app.table.get_children(), (spotify_id,))
+        self.assertEqual(self.app.table.selection(), (spotify_id,))
+        self.app.last_sessions = []
+        self.app._refresh_table()
+        self.assertEqual(self.app.table.get_children(), ("no-audio-sessions",))
 
 
 if __name__ == "__main__":

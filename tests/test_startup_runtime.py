@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from app import VolumeManagerApp
+from app_volume_manager.audio_monitor import DEVICES_CHANGED, SESSIONS_CHANGED
 from app_volume_manager.rules import AppRule
 from app_volume_manager.settings import SettingsError
 from app_volume_manager.single_instance import SingleInstance
@@ -38,7 +39,7 @@ class StartupRuntimeTests(unittest.TestCase):
              patch.object(VolumeManagerApp, "_build_ui", build_ui), \
              patch.object(VolumeManagerApp, "_start_tray_icon"), \
              patch("app.messagebox.showwarning") as warning:
-            VolumeManagerApp(root, start_minimized=True)
+            VolumeManagerApp(root, Mock(), start_minimized=True)
         self.assertEqual(events[:4], ["initialize", "monitor", ("volume", 15), "ui"])
         root.withdraw.assert_called_once_with()
         warning.assert_not_called()
@@ -48,17 +49,36 @@ class StartupRuntimeTests(unittest.TestCase):
         for ready, error, expected in ((True, None, 60_000), (False, "disconnected", 5_000)):
             with self.subTest(ready=ready):
                 app = VolumeManagerApp.__new__(VolumeManagerApp)
-                app.root = Mock()
+                app.root, app.backend = Mock(), Mock()
                 app._closing = False
                 app.window_visible = False
-                app.audio_monitor = Mock(is_ready=ready, last_error=error)
+                app.instance_guard = Mock(show_requested=Mock(return_value=False))
+                app._startup_results = queue.SimpleQueue()
+                app.audio_monitor = Mock(healthy=ready and not error)
                 app._audio_event_queue = queue.SimpleQueue()
-                app._audio_event_queue.put(True)
+                app._audio_event_queue.put(SESSIONS_CHANGED)
                 app._scan_sessions = Mock()
                 app._schedule_poll = Mock()
                 app._process_audio_events()
                 app._scan_sessions.assert_called_once_with(update_table=False)
                 app._schedule_poll.assert_called_once_with(expected)
+                app.backend.invalidate_devices.assert_not_called()
+
+    def test_device_events_make_the_next_sweep_list_devices_again(self):
+        import queue
+        app = VolumeManagerApp.__new__(VolumeManagerApp)
+        app.root, app.backend = Mock(), Mock()
+        app._closing = False
+        app.window_visible = False
+        app.instance_guard = Mock(show_requested=Mock(return_value=False))
+        app._startup_results = queue.SimpleQueue()
+        app.audio_monitor = Mock(healthy=True)
+        app._audio_event_queue = queue.SimpleQueue()
+        app._audio_event_queue.put(DEVICES_CHANGED)
+        app._scan_sessions = Mock()
+        app._schedule_poll = Mock()
+        app._process_audio_events()
+        app.backend.invalidate_devices.assert_called_once_with()
 
     def test_duplicate_launch_signals_existing_copy_and_releases_handles(self):
         for existing, show in ((False, True), (True, True), (True, False)):

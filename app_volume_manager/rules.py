@@ -1,6 +1,7 @@
 """Validated volume rules for an app or a repeatable process role."""
 
 from dataclasses import dataclass
+from typing import Iterable
 
 
 def normalize_executable_name(value: str) -> str:
@@ -77,6 +78,14 @@ class AppRule:
             process_signature=signature,
             process_role=role,
         )
+
+
+def split_rules(rules: Iterable[AppRule]) -> tuple[dict[str, AppRule], dict[str, AppRule]]:
+    """Index rules by lowercase executable (app-wide) and by process signature."""
+    rule_list = list(rules)
+    app_rules = {rule.executable.casefold(): rule for rule in rule_list if not rule.is_process_specific}
+    process_rules = {rule.process_signature: rule for rule in rule_list if rule.is_process_specific}
+    return app_rules, process_rules
 
 
 def resolve_rule(

@@ -43,6 +43,8 @@ Windows only exposes controllable per-application volume after an audio session 
 
 If saved rules cannot be loaded, the original file is preserved and rule saving is blocked. Repair or rename `%LOCALAPPDATA%\AppVolumeManager\settings.json`, then restart the app before saving new rules.
 
+Warnings and errors from the background audio listener are written to `%LOCALAPPDATA%\AppVolumeManager\app.log` (about 200 KB, with one backup).
+
 ## Run tests
 
 Double-click `test.bat`, or run from the project root:

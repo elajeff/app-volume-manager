@@ -16,6 +16,10 @@ class WindowsAudioBackend:
     def __init__(self) -> None:
         self._com_initialized = False
         self.last_warnings: list[str] = []
+        self._devices = None
+        # pid -> (process start time, executable, signature, role); the start
+        # time guards against a reused PID.
+        self._identities: dict[int, tuple] = {}
 
     def initialize(self) -> None:
         if sys.platform != "win32":
@@ -31,6 +35,7 @@ class WindowsAudioBackend:
     def shutdown(self) -> None:
         if sys.platform != "win32" or not self._com_initialized:
             return
+        self._devices = None  # Release the COM objects while COM is still initialized.
         try:
             import comtypes
 
@@ -40,8 +45,11 @@ class WindowsAudioBackend:
             # Safe during shutdown; Windows will clean up the process regardless.
             pass
 
-    @staticmethod
-    def _read_process(session):
+    def invalidate_devices(self) -> None:
+        """Re-list the playback devices on the next sweep."""
+        self._devices = None
+
+    def _read_process(self, session):
         """Return PID, process object, and process name without dropping sessions needlessly."""
         process_id = None
         try:
@@ -72,6 +80,16 @@ class WindowsAudioBackend:
             except Exception:
                 process = None
 
+        started = None
+        if process is not None:
+            try:
+                started = process.create_time()
+            except Exception:
+                pass
+        cached = self._identities.get(process_id)
+        if started is not None and cached is not None and cached[0] == started:
+            return (process_id, *cached[1:])
+
         executable = ""
         executable_path = ""
         command_line = None
@@ -99,6 +117,9 @@ class WindowsAudioBackend:
             return None
 
         signature, role = identify_process_role(executable, command_line)
+        if started is not None and command_line:
+            # A command line that couldn't be read yet (a process still starting) is retried.
+            self._identities[process_id] = (started, executable, signature, role)
         return process_id, executable, signature, role
 
     def wrap_notified_session(self, raw_session, endpoint_id: str, device_name: str, index: int):
@@ -180,16 +201,20 @@ class WindowsAudioBackend:
 
         collected: list[AudioSession] = []
         device_errors: list[str] = []
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                devices = AudioUtilities.GetAllDevices(
-                    data_flow=EDataFlow.eRender.value,
-                    device_state=DEVICE_STATE.ACTIVE.value,
-                )
-        except Exception as exc:
-            devices = []
-            device_errors.append(f"Could not enumerate playback devices: {exc}")
+        devices = self._devices
+        if devices is None:
+            # Pycaw reads every property of every device here, so keep the
+            # result until the monitor reports that the devices changed.
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    devices = self._devices = AudioUtilities.GetAllDevices(
+                        data_flow=EDataFlow.eRender.value,
+                        device_state=DEVICE_STATE.ACTIVE.value,
+                    )
+            except Exception as exc:
+                devices = []
+                device_errors.append(f"Could not enumerate playback devices: {exc}")
 
         # Query every active render endpoint so applications routed to headphones
         # or a communications device appear too, not just the default speaker.
@@ -212,6 +237,7 @@ class WindowsAudioBackend:
                         device_errors.append(f"{device_name}, session {index}: {exc}")
             except Exception as exc:
                 device_errors.append(f"{device_name}: {exc}")
+                self._devices = None  # The device may be gone; list them again next time.
 
         # Pycaw's documented helper is a compatibility fallback for its default
         # output endpoint. This covers setups where per-device enumeration
@@ -236,6 +262,11 @@ class WindowsAudioBackend:
         unique: dict[str, AudioSession] = {}
         for session in collected:
             unique.setdefault(session.session_id, session)
+
+        live_pids = {session.process_id for session in unique.values()}
+        for pid in list(self._identities):
+            if pid not in live_pids:
+                self._identities.pop(pid, None)
 
         self.last_warnings = device_errors[:3]
         if not unique and device_errors:

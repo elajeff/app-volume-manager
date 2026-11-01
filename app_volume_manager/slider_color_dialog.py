@@ -254,8 +254,7 @@ def show_slider_color_dialog(
         y = max(0, min(palette_height - 1, event.y))
         hsv[0] = y / (palette_height - 1)
         active_editor = None
-        # Immediately redraw the large square as the hue changes. Previously
-        # its colors stayed stale until the pointer moved back over the square.
+        # Redraw the square as soon as the hue changes.
         if abs(hsv[0] - rendered_hue) > 0.0001:
             draw_palette(hsv[0])
         draw_hue_marker(hsv[0])

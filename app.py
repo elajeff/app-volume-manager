@@ -2,22 +2,24 @@
 
 import argparse
 import ctypes
+import logging
 import os
 import queue
 import sys
 import threading
 import tkinter as tk
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import psutil
 
 from app_volume_manager.audio_backend import AudioBackendError, WindowsAudioBackend
-from app_volume_manager.audio_monitor import AudioSessionMonitor, refresh_interval_ms
+from app_volume_manager.audio_monitor import DEVICES_CHANGED, AudioSessionMonitor, refresh_interval_ms
 from app_volume_manager.color_utils import normalize_hex_color
 from app_volume_manager.process_list import ProcessRow, build_process_rows
 from app_volume_manager.rules import AppRule
-from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore
+from app_volume_manager.settings import PreferenceStore, SettingsError, SettingsStore, default_settings_path
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
 from app_volume_manager.single_instance import SingleInstance
@@ -27,6 +29,21 @@ APP_NAME = "App Volume Manager"
 APP_USER_MODEL_ID = "AppVolumeManager.Desktop"
 AUDIO_EVENT_CHECK_MS = 100
 DEFAULT_SLIDER_THUMB_COLOR = PreferenceStore.DEFAULT_SLIDER_THUMB_COLOR
+
+PALETTES = {
+    "light": {
+        "background": "#f3f5f8", "panel": "#ffffff", "text": "#202938",
+        "muted": "#5d6878", "field": "#ffffff", "border": "#d4dce7",
+        "selected": "#d8e8ff", "heading": "#e8edf4", "accent": "#356cc4",
+        "trough": "#d9e0e9",
+    },
+    "dark": {
+        "background": "#171a21", "panel": "#222733", "text": "#e8edf5",
+        "muted": "#b1bbcb", "field": "#1c212b", "border": "#3b4555",
+        "selected": "#344c70", "heading": "#2b3240", "accent": "#8ab4f8",
+        "trough": "#3b4555",
+    },
+}
 
 
 def resource_path(relative_path: str) -> Path:
@@ -49,6 +66,20 @@ def set_windows_app_identity() -> None:
         pass
 
 
+def percent(value) -> int:
+    """Round a slider value to a whole percentage from 0 to 100."""
+    return max(0, min(100, int(float(value) + 0.5)))
+
+
+def configure_logging() -> None:
+    """Keep a small log of warnings and errors next to the settings file."""
+    log_path = default_settings_path().with_name("app.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(log_path, maxBytes=200_000, backupCount=1, encoding="utf-8", delay=True)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.WARNING, handlers=[handler])
+
+
 def allow_scale_thumb_click(event) -> str | None:
     """Allow mouse interaction only when the pointer is on the scale thumb.
 
@@ -66,15 +97,15 @@ def allow_scale_thumb_click(event) -> str | None:
 
 
 class VolumeManagerApp:
-    def __init__(self, root: tk.Tk, start_minimized: bool = False) -> None:
+    def __init__(self, root: tk.Tk, instance: SingleInstance, start_minimized: bool = False) -> None:
         self.root = root
+        self.instance_guard = instance
         if start_minimized:
             self.root.withdraw()
         self.store = SettingsStore()
         self.preference_store = PreferenceStore()
         self.theme = "light"
         self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
-        self.style = None
         self._native_icon_handle = None
         self.backend = WindowsAudioBackend()
         self.engine = VolumeRuleEngine()
@@ -83,6 +114,7 @@ class VolumeManagerApp:
         self.checked_rows: set[str] = set()
         self._row_info: dict[str, ProcessRow] = {}
         self._all_row_info: dict[str, ProcessRow] = {}
+        self._shown_rows: dict[str, tuple] = {}
         # Temporary PID-scoped targets are used only when Windows doesn't expose
         # enough stable role information to create a safe persistent profile.
         self.temporary_process_targets: dict[tuple[int, str], int] = {}
@@ -95,7 +127,6 @@ class VolumeManagerApp:
         self._poll_after_id = None
         self._audio_event_after_id = None
         self._audio_event_queue: queue.SimpleQueue = queue.SimpleQueue()
-        self.audio_monitor: AudioSessionMonitor | None = None
         self._startup_busy = False
         self._startup_enabled = False
         self._startup_results: queue.SimpleQueue = queue.SimpleQueue()
@@ -148,13 +179,13 @@ class VolumeManagerApp:
         self._start_startup_update(None)
 
         self._start_tray_icon()
-        self._audio_event_after_id = self.root.after(
-            AUDIO_EVENT_CHECK_MS, self._process_audio_events
-        )
         if start_minimized and self.tray_icon is not None:
             self.window_visible = False
         elif start_minimized:
             self.root.deiconify()  # Keep the app reachable if tray setup fails.
+        self._audio_event_after_id = self.root.after(
+            AUDIO_EVENT_CHECK_MS, self._process_audio_events
+        )
         self._schedule_poll(300)
         if startup_errors:
             self.status_var.set(startup_errors[0])
@@ -175,7 +206,7 @@ class VolumeManagerApp:
             self.window_icon = None
 
         # When launched from source, Windows otherwise may use pythonw.exe's icon
-        # for the taskbar button. Explicit WM_SETICON messages set both window sizes.
+        # for the taskbar button. An explicit WM_SETICON sets the window icon directly.
         if sys.platform == "win32":
             try:
                 self.root.update_idletasks()
@@ -203,23 +234,7 @@ class VolumeManagerApp:
     def _apply_theme(self, theme: str) -> None:
         """Apply a small, consistent light or dark palette to the Tk UI."""
         self.theme = theme if theme in {"light", "dark"} else "light"
-        if not hasattr(self, "slider_thumb_color"):
-            self.slider_thumb_color = DEFAULT_SLIDER_THUMB_COLOR
-        palettes = {
-            "light": {
-                "background": "#f3f5f8", "panel": "#ffffff", "text": "#202938",
-                "muted": "#5d6878", "field": "#ffffff", "border": "#d4dce7",
-                "selected": "#d8e8ff", "heading": "#e8edf4", "accent": "#356cc4",
-                "trough": "#d9e0e9",
-            },
-            "dark": {
-                "background": "#171a21", "panel": "#222733", "text": "#e8edf5",
-                "muted": "#b1bbcb", "field": "#1c212b", "border": "#3b4555",
-                "selected": "#344c70", "heading": "#2b3240", "accent": "#8ab4f8",
-                "trough": "#3b4555",
-            },
-        }
-        colors = palettes[self.theme]
+        colors = self.colors = PALETTES[self.theme]
         self.root.configure(background=colors["background"])
         self.style = ttk.Style(self.root)
         try:
@@ -278,20 +293,18 @@ class VolumeManagerApp:
             "Horizontal.TScale", background=colors["background"],
             troughcolor=colors["trough"],
         )
-        self._configure_volume_slider_style(colors["trough"])
-        self._configure_scrollbar_styles(colors["trough"], colors["border"])
+        self._configure_volume_slider_style()
+        self._configure_scrollbar_styles()
 
-    def _configure_scrollbar_styles(self, trough_color: str, border_color: str) -> None:
+    def _configure_scrollbar_styles(self) -> None:
         """Use the selected slider color for both process-list scrollbars."""
-        if self.style is None:
-            return
         for orientation in ("Vertical", "Horizontal"):
             style_name = f"App.{orientation}.TScrollbar"
             self.style.configure(
                 style_name,
                 background=self.slider_thumb_color,
-                troughcolor=trough_color,
-                bordercolor=border_color,
+                troughcolor=self.colors["trough"],
+                bordercolor=self.colors["border"],
                 lightcolor=self.slider_thumb_color,
                 darkcolor=self.slider_thumb_color,
                 arrowcolor=self.slider_thumb_color,
@@ -306,16 +319,12 @@ class VolumeManagerApp:
                 ],
             )
 
-    def _configure_volume_slider_style(self, trough_color: str | None = None) -> None:
+    def _configure_volume_slider_style(self) -> None:
         """Use the same customizable, high-contrast slider in both themes."""
-        if self.style is None:
-            return
-        if trough_color is None:
-            trough_color = "#d9e0e9" if self.theme == "light" else "#3b4555"
         self.style.configure(
             "Volume.Horizontal.TScale",
             background=self.slider_thumb_color,
-            troughcolor=trough_color,
+            troughcolor=self.colors["trough"],
             bordercolor=self.slider_thumb_color,
             lightcolor=self.slider_thumb_color,
             darkcolor=self.slider_thumb_color,
@@ -337,11 +346,7 @@ class VolumeManagerApp:
         """Update the visible slider; persistence is handled separately."""
         self.slider_thumb_color = normalize_hex_color(color)
         self._configure_volume_slider_style()
-        colors = {
-            "light": ("#d9e0e9", "#d4dce7"),
-            "dark": ("#3b4555", "#3b4555"),
-        }[self.theme]
-        self._configure_scrollbar_styles(*colors)
+        self._configure_scrollbar_styles()
 
     def change_theme(self, _event=None) -> None:
         requested = self.theme_var.get().casefold()
@@ -355,10 +360,6 @@ class VolumeManagerApp:
         self.status_var.set(f"{requested.title()} appearance saved.")
 
     def _build_ui(self) -> None:
-        # The GUI layout test builds the UI with an object created via __new__.
-        # Make that focused test path use the same default style as a fresh install.
-        if getattr(self, "style", None) is None:
-            self._apply_theme(getattr(self, "theme", "light"))
         outer = ttk.Frame(self.root, padding=14)
         outer.pack(fill="both", expand=True)
         # Grid gives the process table the only expandable row. Unlike a long
@@ -380,18 +381,19 @@ class VolumeManagerApp:
         )
         theme_picker.pack(side="left", padx=(0, 10))
         theme_picker.bind("<<ComboboxSelected>>", self.change_theme)
-        ttk.Button(heading_actions, text="Refresh list", command=self._scan_sessions).pack(side="left")
+        ttk.Button(heading_actions, text="Refresh list", command=self.refresh_list).pack(side="left")
 
-        ttk.Label(
+        description = ttk.Label(
             outer,
             text=(
                 "Lists running processes with audio. Audio sessions counts the separate Windows "
                 "sessions owned by each process; a rule adjusts each session. Saved rules apply "
                 "when matching sessions appear."
             ),
-            wraplength=1080,
             justify="left",
-        ).grid(row=1, column=0, sticky="ew", pady=(4, 6))
+        )
+        description.grid(row=1, column=0, sticky="ew", pady=(4, 6))
+        description.bind("<Configure>", lambda event: description.configure(wraplength=event.width))
 
         search_frame = ttk.Frame(outer)
         search_frame.grid(row=2, column=0, sticky="ew", pady=(0, 7))
@@ -414,10 +416,8 @@ class VolumeManagerApp:
         ).grid(row=0, column=3, sticky="e")
         self.search_var.trace_add("write", lambda *_args: self._refresh_table())
 
-        # The Treeview must be created with its actual layout container as its
-        # Tk parent. Using outer as parent and packing it into table_frame via
-        # pack(in_=...) made the widget get covered by the frame on Windows, so
-        # sessions were detected but the table appeared blank.
+        # Parent the Treeview to table_frame itself; parenting it to `outer` and
+        # packing it in with in_= left it covered on Windows (a blank table).
         self.table_frame = ttk.Frame(outer)
         self.table_frame.grid(row=3, column=0, sticky="nsew")
 
@@ -545,20 +545,15 @@ class VolumeManagerApp:
 
     def _set_vertical_scrollbar(self, first: str, last: str) -> None:
         """Show the colored process scrollbar only when the table can scroll."""
-        scrollbar = getattr(self, "vertical_scrollbar", None)
-        if scrollbar is None:
-            return
-        scrollbar.set(first, last)
+        self.vertical_scrollbar.set(first, last)
         if float(first) <= 0.0 and float(last) >= 1.0:
-            scrollbar.grid_remove()
+            self.vertical_scrollbar.grid_remove()
         else:
-            scrollbar.grid(row=0, column=1, sticky="ns")
+            self.vertical_scrollbar.grid(row=0, column=1, sticky="ns")
 
     def _on_table_resize(self, event=None) -> None:
         """Fit the process columns to the current width, scrolling only if needed."""
         if event is not None and event.widget is not self.table:
-            return
-        if not hasattr(self, "table") or not self.table.winfo_exists():
             return
         available = self.table.winfo_width() - 4
         if available < 100:
@@ -598,13 +593,10 @@ class VolumeManagerApp:
 
     def _on_root_resize(self, event) -> None:
         """Adapt the status line to the available footer width during resizing."""
-        if event.widget is not self.root or not hasattr(self, "status_label"):
+        if event.widget is not self.root:
             return
-        try:
-            available = max(180, self.root.winfo_width() - 390)
-            self.status_label.configure(wraplength=min(560, available))
-        except tk.TclError:
-            pass
+        available = max(180, self.root.winfo_width() - 390)
+        self.status_label.configure(wraplength=min(560, available))
 
     def _start_tray_icon(self) -> None:
         try:
@@ -613,7 +605,6 @@ class VolumeManagerApp:
 
             with Image.open(resource_path("assets/app-icon.png")) as source:
                 image = source.convert("RGBA")
-                image.thumbnail((64, 64), Image.Resampling.LANCZOS)
             menu = pystray.Menu(
                 pystray.MenuItem("Open", self._tray_show, default=True),
                 pystray.MenuItem("Reapply saved volumes", self._tray_reapply),
@@ -640,7 +631,7 @@ class VolumeManagerApp:
         self.root.lift()
         self.window_visible = True
         self._scan_sessions(update_table=True)
-        self._schedule_poll(2000)
+        self._reschedule_poll()
         try:
             self.root.focus_force()
         except tk.TclError:
@@ -652,47 +643,28 @@ class VolumeManagerApp:
             return
         self.root.withdraw()
         self.window_visible = False
-        self._schedule_poll(
-            refresh_interval_ms(
-                False, bool(
-                    self.audio_monitor and self.audio_monitor.is_ready
-                    and not self.audio_monitor.last_error
-                )
-            )
-        )
+        self._reschedule_poll()
 
-    def _on_visibility_event(self, _event=None) -> None:
-        if not self._closing:
-            try:
-                self.root.after_idle(self._sync_window_visibility)
-            except tk.TclError:
-                pass
+    def _on_visibility_event(self, event) -> None:
+        # Bindings on the toplevel also receive its child widgets' Map/Unmap events.
+        if event.widget is self.root and not self._closing:
+            self.root.after_idle(self._sync_window_visibility)
 
     def _sync_window_visibility(self) -> None:
         if self._closing:
             return
-        try:
-            visible = self.root.state() == "normal"
-        except tk.TclError:
-            return
+        visible = self.root.state() == "normal"
         if visible == self.window_visible:
             return
         self.window_visible = visible
         if visible:
             # On restore, refresh immediately rather than waiting for the next timer.
             self._scan_sessions(update_table=True)
-            self._schedule_poll(2000)
-        else:
-            ready = bool(
-                self.audio_monitor
-                and self.audio_monitor.is_ready
-                and not self.audio_monitor.last_error
-            )
-            self._schedule_poll(refresh_interval_ms(False, ready))
+        self._reschedule_poll()
 
-    def _queue_audio_event(self) -> None:
+    def _queue_audio_event(self, kind: str) -> None:
         if not self._closing:
-            self._audio_event_queue.put(True)
+            self._audio_event_queue.put(kind)
 
     def _apply_notified_session(self, session) -> None:
         """Apply a persistent rule on the Core Audio callback thread immediately."""
@@ -726,24 +698,15 @@ class VolumeManagerApp:
         else:
             self.checked_rows.add(row_id)
         self._refresh_table()
-        # _refresh_table rebuilds the rows to update their checkbox symbols.
-        # Restore the blue Treeview highlight for the row the user clicked.
-        if row_id in self.table.get_children():
-            self.table.selection_set(row_id)
-            self.table.focus(row_id)
+        # Returning "break" skips the default binding, so highlight the row here.
+        self.table.selection_set(row_id)
+        self.table.focus(row_id)
         return "break"
 
     def _clear_process_search(self, _event=None) -> str:
         """Clear the process filter and return focus to the search field."""
-        search_var = getattr(self, "search_var", None)
-        if search_var is not None:
-            search_var.set("")
-        search_entry = getattr(self, "search_entry", None)
-        if search_entry is not None:
-            try:
-                search_entry.focus_set()
-            except tk.TclError:
-                pass
+        self.search_var.set("")
+        self.search_entry.focus_set()
         return "break"
 
     @staticmethod
@@ -772,11 +735,9 @@ class VolumeManagerApp:
         return all(term in searchable_text for term in terms)
 
     def _update_target_label(self, value: str) -> None:
-        volume = max(0, min(100, int(float(value) + 0.5)))
-        self.target_volume_label.set(f"Volume for selected: {volume}%")
+        self.target_volume_label.set(f"Volume for selected: {percent(value)}%")
 
     def edit_slider_thumb_color(self) -> None:
-        """Open the separate slider color editor."""
         show_slider_color_dialog(
             self.root,
             self.slider_thumb_color,
@@ -786,8 +747,7 @@ class VolumeManagerApp:
         )
 
     def _selected_rows(self) -> list[ProcessRow]:
-        rows = getattr(self, "_all_row_info", self._row_info)
-        return [rows[row_id] for row_id in self.checked_rows if row_id in rows]
+        return [self._all_row_info[row_id] for row_id in self.checked_rows if row_id in self._all_row_info]
 
     def apply_to_selected(self) -> None:
         selected = self._selected_rows()
@@ -795,7 +755,7 @@ class VolumeManagerApp:
             messagebox.showinfo(APP_NAME, "Tick one or more rows in the Select column first.")
             return
 
-        target = max(0, min(100, int(self.target_volume_var.get() + 0.5)))
+        target = percent(self.target_volume_var.get())
         updated = {rule.key: rule for rule in self.rules}
         persistent_count = 0
         temporary_rows: list[ProcessRow] = []
@@ -815,7 +775,7 @@ class VolumeManagerApp:
             )
             persistent_count += 1
 
-        all_rows = getattr(self, "_all_row_info", self._row_info)
+        all_rows = self._all_row_info
         live_rows = [
             row for row in all_rows.values()
             if row.active and row.process_id is not None
@@ -856,13 +816,14 @@ class VolumeManagerApp:
                 )
 
             if save_for_role:
-                updated[f"process:{row.executable.casefold()}:{signature}"] = AppRule(
+                profile_rule = AppRule(
                     row.executable,
                     target,
                     True,
                     process_signature=signature,
                     process_role=row.process_role,
                 )
+                updated[profile_rule.key] = profile_rule
                 persistent_count += 1
             else:
                 temporary_rows.extend(
@@ -1036,7 +997,7 @@ class VolumeManagerApp:
 
         def save() -> None:
             try:
-                new_rule = AppRule(name_var.get(), int(round(volume_var.get())), enabled_var.get())
+                new_rule = AppRule(name_var.get(), percent(volume_var.get()), enabled_var.get())
                 new_rules = [rule for rule in self.rules if rule.key != new_rule.key]
                 new_rules.append(new_rule)
                 new_rules.sort(key=lambda rule: rule.executable.casefold())
@@ -1059,7 +1020,7 @@ class VolumeManagerApp:
 
     @staticmethod
     def _update_volume_label(variable: tk.DoubleVar, label: tk.StringVar, value: str) -> None:
-        volume = max(0, min(100, int(float(value) + 0.5)))
+        volume = percent(value)
         variable.set(volume)
         label.set(f"Target volume: {volume}%")
 
@@ -1138,49 +1099,47 @@ class VolumeManagerApp:
                 pass
         self._poll_after_id = self.root.after(max(0, delay_ms), self._poll_sessions)
 
+    def _reschedule_poll(self) -> None:
+        self._schedule_poll(refresh_interval_ms(self.window_visible, self.audio_monitor.healthy))
+
     def _poll_sessions(self) -> None:
         self._poll_after_id = None
         if self._closing:
             return
-        monitor_ready = bool(
-            self.audio_monitor
-            and self.audio_monitor.is_ready
-            and not self.audio_monitor.last_error
-        )
         # In the tray, new sessions are handled by Core Audio events. A 60-second
         # safety sweep catches missed notifications; if events cannot be registered,
         # fall back to 5-second polling so automation still works.
+        if not (self.window_visible and self.audio_monitor.healthy):
+            self.backend.invalidate_devices()
         self._scan_sessions(update_table=self.window_visible)
-        if not self._closing:
-            self._schedule_poll(refresh_interval_ms(self.window_visible, monitor_ready))
+        self._reschedule_poll()
 
     def _process_audio_events(self) -> None:
         self._audio_event_after_id = None
         if self._closing:
             return
-        if hasattr(self, "_startup_results"):
-            self._process_startup_results()
-        instance = getattr(self, "instance_guard", None)
-        if instance is not None and instance.show_requested():
+        self._process_startup_results()
+        if self.instance_guard.show_requested():
             self.show_window()
-        has_changes = False
+        kinds = set()
         while True:
             try:
-                self._audio_event_queue.get_nowait()
-                has_changes = True
+                kinds.add(self._audio_event_queue.get_nowait())
             except queue.Empty:
                 break
-        if has_changes:
+        if kinds:
+            if DEVICES_CHANGED in kinds:
+                self.backend.invalidate_devices()
             self._scan_sessions(update_table=self.window_visible)
-            ready = bool(
-                self.audio_monitor and self.audio_monitor.is_ready
-                and not self.audio_monitor.last_error
-            )
-            self._schedule_poll(refresh_interval_ms(self.window_visible, ready))
+            self._reschedule_poll()
         if not self._closing:
             self._audio_event_after_id = self.root.after(
                 AUDIO_EVENT_CHECK_MS, self._process_audio_events
             )
+
+    def refresh_list(self) -> None:
+        self.backend.invalidate_devices()
+        self._scan_sessions()
 
     def _scan_sessions(
         self, force: bool = False, update_table: bool | None = None
@@ -1231,7 +1190,7 @@ class VolumeManagerApp:
                 self.status_var.set(
                     f"Found {process_count} process(es) with audio across {len(self.last_sessions)} session(s)."
                 )
-            warnings = getattr(self.backend, "last_warnings", [])
+            warnings = self.backend.last_warnings
             if warnings and not result.errors:
                 self.status_var.set(
                     f"Found {process_count} process(es) with audio; {len(warnings)} device warning(s). "
@@ -1242,118 +1201,99 @@ class VolumeManagerApp:
         if update_table:
             self._refresh_table()
 
+    def _table_values(self, row: ProcessRow) -> tuple:
+        if row.current_volumes:
+            current_volume = (
+                f"{row.current_volumes[0]}%"
+                if len(row.current_volumes) == 1
+                else "Mixed"
+            )
+        else:
+            current_volume = "—"
+        temporary_target = None
+        if row.active and row.process_id is not None:
+            temporary_target = self.temporary_process_targets.get(
+                (row.process_id, row.executable.casefold())
+            )
+        target = (
+            f"{temporary_target}%" if temporary_target is not None
+            else f"{row.rule.volume}%" if row.rule is not None
+            else "—"
+        )
+        if not row.active:
+            if row.rule and not row.rule.enabled:
+                status = "Saved rule disabled"
+            elif row.rule and row.rule.is_process_specific:
+                status = "Waiting for matching profile"
+            else:
+                status = "Waiting for app audio"
+            process_id = "—"
+            session_count = "0"
+        else:
+            process_id = str(row.process_id) if row.process_id is not None else "Unknown"
+            session_count = str(row.session_count)
+            if temporary_target is not None:
+                status = "Temporary process target"
+            elif row.rule is None:
+                status = "Not configured"
+            elif not row.rule.enabled:
+                status = "Rule disabled"
+            elif row.rule.is_process_specific:
+                status = "Saved process profile"
+            else:
+                status = "App rule"
+        checked = "☑" if row.row_id in self.checked_rows else "☐"
+        details = "; ".join(row.session_details) or "—"
+        return (checked, row.executable, process_id, session_count, details,
+                current_volume, target, status)
+
     def _refresh_table(self) -> None:
-        previous_selection = self.table.selection()
-        highlighted_row = previous_selection[0] if previous_selection else None
         all_rows = build_process_rows(self.last_sessions, self.rules)
         self._all_row_info = {row.row_id: row for row in all_rows}
         # Filtering changes only which rows are drawn. Checked processes stay
         # checked while hidden by a query, and can still be acted on safely.
         self.checked_rows.intersection_update(self._all_row_info)
-        query = getattr(self, "search_var", None)
-        search_text = query.get().strip() if query is not None else ""
-        rows = [row for row in all_rows if self._row_matches_search(row, search_text)]
+        rows = [row for row in all_rows if self._row_matches_search(row, self.search_var.get().strip())]
         self._row_info = {row.row_id: row for row in rows}
-        summary_var = getattr(self, "search_summary_var", None)
-        if summary_var is not None:
-            summary_var.set(
-                f"{len(rows)} shown  ·  {len(self.checked_rows)} selected"
-            )
+        self.search_summary_var.set(f"{len(rows)} shown  ·  {len(self.checked_rows)} selected")
 
-        for item in self.table.get_children():
-            self.table.delete(item)
-        if not rows:
-            if all_rows:
-                placeholder_id = "no-search-matches"
-                values = (
-                    "—", "No matching processes", "—", "—", "—", "—", "—",
-                    "Clear the search to see all processes",
-                )
-            else:
-                placeholder_id = "no-audio-sessions"
-                values = (
-                    "—", "No audio sessions", "—", "0", "—", "—", "—",
-                    "Play sound in an app, then refresh",
-                )
-            self.table.insert(
-                "", "end", iid=placeholder_id, values=values,
-            )
-            self._sync_volume_scale_enabled()
-            return
+        if rows:
+            shown = {row.row_id: self._table_values(row) for row in rows}
+        elif all_rows:
+            shown = {"no-search-matches": (
+                "—", "No matching processes", "—", "—", "—", "—", "—",
+                "Clear the search to see all processes",
+            )}
+        else:
+            shown = {"no-audio-sessions": (
+                "—", "No audio sessions", "—", "0", "—", "—", "—",
+                "Play sound in an app, then refresh",
+            )}
 
-        for row in rows:
-            if row.current_volumes:
-                current_volume = (
-                    f"{row.current_volumes[0]}%"
-                    if len(row.current_volumes) == 1
-                    else "Mixed"
-                )
-            else:
-                current_volume = "—"
-            temporary_target = None
-            if row.active and row.process_id is not None:
-                temporary_target = self.temporary_process_targets.get(
-                    (row.process_id, row.executable.casefold())
-                )
-            target = (
-                f"{temporary_target}%" if temporary_target is not None
-                else f"{row.rule.volume}%" if row.rule is not None
-                else "—"
-            )
-            if not row.active:
-                if row.rule and not row.rule.enabled:
-                    status = "Saved rule disabled"
-                elif row.rule and row.rule.is_process_specific:
-                    status = "Waiting for matching profile"
-                else:
-                    status = "Waiting for app audio"
-                process_id = "—"
-                session_count = "0"
-            else:
-                process_id = str(row.process_id) if row.process_id is not None else "Unknown"
-                session_count = str(row.session_count)
-                if temporary_target is not None:
-                    status = "Temporary process target"
-                elif row.rule is None:
-                    status = "Not configured"
-                elif not row.rule.enabled:
-                    status = "Rule disabled"
-                elif row.rule.is_process_specific:
-                    status = "Saved process profile"
-                else:
-                    status = "App rule"
-            checked = "☑" if row.row_id in self.checked_rows else "☐"
-            details = "; ".join(row.session_details) or "—"
-            self.table.insert(
-                "", "end", iid=row.row_id,
-                values=(checked, row.executable, process_id, session_count, details,
-                        current_volume, target, status),
-            )
-        # The table is rebuilt during automatic refreshes. Restore the blue
-        # row highlight while the underlying process is still present.
-        if highlighted_row in self._row_info:
-            self.table.selection_set(highlighted_row)
-            self.table.focus(highlighted_row)
+        if list(shown) == list(self._shown_rows):
+            # Same rows in the same order: touch only the cells that changed.
+            for row_id, values in shown.items():
+                if values != self._shown_rows[row_id]:
+                    self.table.item(row_id, values=values)
+        else:
+            previous_selection = self.table.selection()
+            self.table.delete(*self.table.get_children())
+            for row_id, values in shown.items():
+                self.table.insert("", "end", iid=row_id, values=values)
+            if previous_selection and previous_selection[0] in self._row_info:
+                self.table.selection_set(previous_selection[0])
+                self.table.focus(previous_selection[0])
+        self._shown_rows = shown
         self._sync_volume_scale_enabled()
 
     def _sync_volume_scale_enabled(self) -> None:
         """Only allow volume adjustments when at least one process is checked."""
-        scale = getattr(self, "volume_scale", None)
-        if scale is None:
-            return
         has_selection = bool(self._selected_rows())
-        try:
-            scale.state(["!disabled"] if has_selection else ["disabled"])
-        except tk.TclError:
-            pass
-        label = getattr(self, "target_volume_label", None)
-        volume_var = getattr(self, "target_volume_var", None)
-        if label is not None and volume_var is not None:
-            if has_selection:
-                volume = int(float(volume_var.get()) + 0.5)
-                label.set(f"Volume for selected: {volume}%")
-            else:
-                label.set("Select a process to change volume")
+        self.volume_scale.state(["!disabled"] if has_selection else ["disabled"])
+        if has_selection:
+            self.target_volume_label.set(f"Volume for selected: {percent(self.target_volume_var.get())}%")
+        else:
+            self.target_volume_label.set("Select a process to change volume")
 
     def close(self) -> None:
         if self._closing:
@@ -1361,12 +1301,8 @@ class VolumeManagerApp:
         self._closing = True
         for callback_id in (self._poll_after_id, self._audio_event_after_id):
             if callback_id is not None:
-                try:
-                    self.root.after_cancel(callback_id)
-                except tk.TclError:
-                    pass
-        if self.audio_monitor is not None:
-            self.audio_monitor.stop()
+                self.root.after_cancel(callback_id)
+        self.audio_monitor.stop()
         if self.tray_icon is not None:
             try:
                 self.tray_icon.stop()
@@ -1396,10 +1332,10 @@ def main() -> int:
     try:
         if not instance.acquire(show_existing=not args.minimized):
             return 0
+        configure_logging()
         set_windows_app_identity()
         root = tk.Tk()
-        app = VolumeManagerApp(root, start_minimized=args.minimized)
-        app.instance_guard = instance
+        VolumeManagerApp(root, instance, start_minimized=args.minimized)
         root.mainloop()
         return 0
     finally:
