@@ -4,7 +4,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 
-from app import VolumeManagerApp
+from app_volume_manager.ui.main_window import VolumeManagerApp
 
 
 def descendants(widget):

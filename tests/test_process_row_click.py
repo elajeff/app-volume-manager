@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from app import VolumeManagerApp
+from app_volume_manager.ui.main_window import VolumeManagerApp
 
 
 class ProcessRowClickTests(unittest.TestCase):

@@ -2,7 +2,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from app import VolumeManagerApp, allow_scale_thumb_click
+from app_volume_manager.ui.main_window import VolumeManagerApp
+from app_volume_manager.ui.volume_scale import allow_scale_thumb_click
 
 
 class FakeScale:

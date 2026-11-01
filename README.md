@@ -68,7 +68,8 @@ Keep the full **App Volume Manager** folder together when distributing it manual
 
 ## Project structure
 
-- `app.py` — application controller: selection, search, polling, and user actions.
+- `app.py` — entry point: single-instance check, logging, and starting the window. Keep it at the project root; the sign-in task and `run.bat` launch it by name.
+- `app_volume_manager/ui/main_window.py` — the main window: selection, search, polling, and user actions.
 - `app_volume_manager/ui/process_table.py` — the process table, its scrollbars, and column fitting.
 - `app_volume_manager/color_utils.py` — validated color conversion.
 - `app_volume_manager/ui/slider_color_dialog.py` and `rule_dialog.py` — the slider color editor and the Add rule dialog.

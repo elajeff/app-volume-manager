@@ -3,11 +3,11 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from app import VolumeManagerApp
 from app_volume_manager.audio_monitor import DEVICES_CHANGED, SESSIONS_CHANGED
 from app_volume_manager.rules import AppRule
 from app_volume_manager.settings import SettingsError
 from app_volume_manager.single_instance import SingleInstance
+from app_volume_manager.ui.main_window import VolumeManagerApp
 from app_volume_manager.volume_service import AudioSession
 
 
@@ -29,16 +29,16 @@ class StartupRuntimeTests(unittest.TestCase):
             events.append("ui")
             app.status_var, app.startup_var, app.startup_status_var = Mock(), Mock(), Mock()
 
-        with patch("app.WindowsAudioBackend", return_value=backend), \
-             patch("app.SettingsStore", return_value=store), \
-             patch("app.PreferenceStore", return_value=preferences), \
-             patch("app.AudioSessionMonitor", return_value=monitor), \
+        with patch("app_volume_manager.ui.main_window.WindowsAudioBackend", return_value=backend), \
+             patch("app_volume_manager.ui.main_window.SettingsStore", return_value=store), \
+             patch("app_volume_manager.ui.main_window.PreferenceStore", return_value=preferences), \
+             patch("app_volume_manager.ui.main_window.AudioSessionMonitor", return_value=monitor), \
              patch.object(VolumeManagerApp, "_start_startup_update"), \
              patch.object(VolumeManagerApp, "_set_window_icon"), \
              patch.object(VolumeManagerApp, "_apply_theme"), \
              patch.object(VolumeManagerApp, "_build_ui", build_ui), \
              patch.object(VolumeManagerApp, "_start_tray_icon"), \
-             patch("app.messagebox.showwarning") as warning:
+             patch("app_volume_manager.ui.main_window.messagebox.showwarning") as warning:
             VolumeManagerApp(root, Mock(), start_minimized=True)
         self.assertEqual(events[:4], ["initialize", "monitor", ("volume", 15), "ui"])
         root.withdraw.assert_called_once_with()
@@ -124,9 +124,9 @@ class StartupWorkerTests(unittest.TestCase):
                     if fail:
                         raise OSError("Access denied")
 
-                with patch("app.set_startup_enabled", side_effect=update) as setter, \
-                     patch("app.threading.Thread", side_effect=start_thread), \
-                     patch("app.messagebox.showerror") as error:
+                with patch("app_volume_manager.ui.main_window.set_startup_enabled", side_effect=update) as setter, \
+                     patch("app_volume_manager.ui.main_window.threading.Thread", side_effect=start_thread), \
+                     patch("app_volume_manager.ui.main_window.messagebox.showerror") as error:
                     try:
                         app._start_startup_update(True)
                         self.assertTrue(entered.wait(1))

@@ -5,8 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app import DEFAULT_SLIDER_THUMB_COLOR, VolumeManagerApp
 from app_volume_manager.selection import TemporaryTargets
+from app_volume_manager.ui.main_window import DEFAULT_SLIDER_THUMB_COLOR, VolumeManagerApp
 from app_volume_manager.volume_service import AudioSession
 
 

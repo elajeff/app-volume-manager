@@ -3,10 +3,10 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from app import VolumeManagerApp
 from app_volume_manager.process_list import ProcessRow
 from app_volume_manager.rules import AppRule
 from app_volume_manager.selection import TemporaryTargets
+from app_volume_manager.ui.main_window import VolumeManagerApp
 from app_volume_manager.volume_service import AudioSession, VolumeRuleEngine
 
 
@@ -66,7 +66,7 @@ class RuleActionTests(unittest.TestCase):
                     app._selected_rows = lambda: [row]
                     key = (123, "discord.exe")
                     app.temporary.add(key, 20, Mock())
-                    with patch("app.messagebox.askyesno", return_value=confirmed):
+                    with patch("app_volume_manager.ui.main_window.messagebox.askyesno", return_value=confirmed):
                         app.remove_selected()
                     self.assertEqual(key in app.temporary, not confirmed)
                     self.assertEqual(app.store.save_rules.call_count, int(saved and confirmed))
@@ -82,7 +82,8 @@ class RuleActionTests(unittest.TestCase):
         key = (123, "discord.exe")
         app.temporary.add(key, 20, Mock())
         app.store.save_rules.side_effect = SettingsError("read only")
-        with patch("app.messagebox.askyesno", return_value=True), patch("app.messagebox.showerror"):
+        with patch("app_volume_manager.ui.main_window.messagebox.askyesno", return_value=True), \
+             patch("app_volume_manager.ui.main_window.messagebox.showerror"):
             app.remove_selected()
         self.assertEqual(app.rules, [rule])
         self.assertEqual(app.temporary.get(key), 20)
