@@ -30,6 +30,7 @@ from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.slider_color_dialog import show_slider_color_dialog
 from app_volume_manager.startup import is_startup_enabled, migrate_startup, set_startup_enabled
 from app_volume_manager.ui.theme import PALETTES, apply_base_theme, configure_scrollbars, configure_volume_slider
+from app_volume_manager.ui.tray import start_tray_icon
 from app_volume_manager.ui.windows_shell import destroy_icon, set_app_user_model_id, set_window_icon
 from app_volume_manager.volume_service import VolumeRuleEngine
 
@@ -465,18 +466,13 @@ class VolumeManagerApp:
 
     def _start_tray_icon(self) -> None:
         try:
-            import pystray
-            from PIL import Image
-
-            with Image.open(resource_path("assets/app-icon.png")) as source:
-                image = source.convert("RGBA")
-            menu = pystray.Menu(
-                pystray.MenuItem("Open", self._tray_show, default=True),
-                pystray.MenuItem("Reapply saved volumes", self._tray_reapply),
-                pystray.MenuItem("Exit", self._tray_exit),
+            self.tray_icon = start_tray_icon(
+                APP_NAME,
+                resource_path("assets/app-icon.png"),
+                self._tray_show,
+                self._tray_reapply,
+                self._tray_exit,
             )
-            self.tray_icon = pystray.Icon("AppVolumeManager", image, APP_NAME, menu)
-            self.tray_icon.run_detached()
         except Exception as exc:
             # The main window still works if the tray library can't initialize.
             self.tray_icon = None

@@ -70,6 +70,9 @@ Keep the full **App Volume Manager** folder together when distributing it manual
 
 - `app.py` — application controller, process table, search, tray integration, and user actions.
 - `app_volume_manager/color_utils.py` and `slider_color_dialog.py` — validated color conversion and the self-contained slider color editor.
+- `app_volume_manager/ui/theme.py` — light and dark palettes and the ttk styles.
+- `app_volume_manager/ui/tray.py` — the system tray icon and its menu.
+- `app_volume_manager/ui/windows_shell.py` — taskbar identity and native window icon calls.
 - `app_volume_manager/audio_backend.py` — Windows audio-session discovery and volume control through Pycaw.
 - `app_volume_manager/audio_monitor.py` — Core Audio session-created notifications, device registration, and retry behavior.
 - `app_volume_manager/process_identity.py` — identifies reusable process profiles from stable command-line details.
