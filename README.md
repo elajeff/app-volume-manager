@@ -4,6 +4,12 @@ Sets the volume of individual Windows apps and keeps it there.
 
 I was tired of Discord's volume resetting itself to 100% and jumpscaring me every time I restarted my PC, so I figured I'd make this app.
 
+Built with Python, Tkinter and the Windows Core Audio API (through pycaw). It reacts to Windows audio notifications instead of polling, tells apart processes that share one .exe, and has a test suite that runs against simulated audio sessions.
+
+![The main window in dark mode, with saved volumes applied to Spotify, VLC and Discord's audio process](docs/images/main-window.png)
+
+The screenshot uses made-up audio sessions.
+
 ## What it does
 
 - Saves a volume for an app and applies it every time that app starts playing audio. If the app or the Windows volume mixer changes it later, it is set back.
@@ -88,3 +94,7 @@ Keep the whole `App Volume Manager` folder together when copying it elsewhere.
 - `assets/`: icons. `tests/`: the test suite.
 
 The app controls per-app audio sessions, not the Windows master volume.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
