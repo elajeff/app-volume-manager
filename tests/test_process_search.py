@@ -114,8 +114,11 @@ class ProcessSearchTests(unittest.TestCase):
         self.assertEqual(self.app.table.item(discord_id, "values")[0], "\u2611")
         self.assertEqual(self.app.table.selection(), (discord_id,))
         self.assertIn("1 selected", self.app.search_summary_var.get())
+        self.assertEqual(self.app.table.focus(), discord_id)
+        self.assertEqual(self.app.checked_rows, {discord_id})
         self.app._on_table_click(event)
         self.assertEqual(self.app.table.item(discord_id, "values")[0], "\u2610")
+        self.assertEqual(self.app.checked_rows, set())
 
     def test_rows_appearing_or_leaving_rebuild_the_table_and_keep_a_surviving_selection(self):
         spotify_id = next(row_id for row_id, row in self.app._all_row_info.items() if row.executable == "Spotify.exe")

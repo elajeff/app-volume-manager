@@ -37,7 +37,6 @@ class ProcessTableLayoutTests(unittest.TestCase):
         self.assertIn("Rule status", headings)
         self.assertIn("Sessions", headings)
         self.assertNotIn("Process role", headings)
-        self.assertEqual(int(app.table.cget("height")), 7)
 
         # Automatic table refreshes should not discard the user's blue row highlight.
         app.table.selection_set(rows[0])

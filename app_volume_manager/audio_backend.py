@@ -50,7 +50,7 @@ class WindowsAudioBackend:
         self._devices = None
 
     def _read_process(self, session):
-        """Return PID, process object, and process name without dropping sessions needlessly."""
+        """Return the PID, executable, signature and role, or None if unnamed."""
         process_id = None
         try:
             process_id = int(session.ProcessId)

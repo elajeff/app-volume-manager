@@ -230,8 +230,6 @@ def show_slider_color_dialog(
     def set_palette_point(event) -> None:
         """Update the preview to the saturation/value point under the pointer."""
         nonlocal active_editor
-        if abs(hsv[0] - rendered_hue) > 0.0001:
-            draw_palette(hsv[0])
         x = max(0, min(palette_width - 1, event.x))
         y = max(0, min(palette_height - 1, event.y))
         hsv[1] = x / (palette_width - 1)
@@ -262,10 +260,6 @@ def show_slider_color_dialog(
         y = max(0, min(palette_height - 1, event.y))
         hsv[0] = y / (palette_height - 1)
         active_editor = None
-        # Redraw the square as soon as the hue changes.
-        if abs(hsv[0] - rendered_hue) > 0.0001:
-            draw_palette(hsv[0])
-        draw_hue_marker(hsv[0])
         update_preview(hsv_to_hex(*hsv))
 
     def hue_motion(event) -> None:
