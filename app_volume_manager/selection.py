@@ -110,6 +110,7 @@ def plan_apply(
     """
     updated = {rule.key: rule for rule in rules}
     persistent_count = 0
+    saved_signatures: set[str] = set()
     active_rows = [row for row in selected if row.active and row.process_id is not None]
     saved_rows = [row for row in selected if not row.active and row.rule is not None]
 
@@ -125,6 +126,8 @@ def plan_apply(
             process_role=old_rule.process_role,
         )
         persistent_count += 1
+        if old_rule.is_process_specific:
+            saved_signatures.add(old_rule.process_signature)
 
     running_counts = Counter(
         row.process_signature for row in all_rows.values()
@@ -155,18 +158,16 @@ def plan_apply(
             )
             updated[profile_rule.key] = profile_rule
             persistent_count += 1
+            saved_signatures.add(signature)
         else:
             temporary_rows.extend(candidate for candidate in active_rows if candidate.process_signature == signature)
 
     # A selected set can hold the same process twice when devices overlap.
     temporary_keys = tuple(dict.fromkeys(target_key(row) for row in temporary_rows))
 
-    persistent_signatures = {
-        rule.process_signature for rule in updated.values() if rule.is_process_specific
-    }
     superseded = frozenset(
         target_key(row) for row in all_rows.values()
-        if row.process_id is not None and row.process_signature in persistent_signatures
+        if row.process_id is not None and row.process_signature in saved_signatures
     )
     new_rules = sorted(updated.values(), key=lambda rule: (rule.executable.casefold(), rule.key))
     return ApplyPlan(new_rules, persistent_count, temporary_keys, superseded)
