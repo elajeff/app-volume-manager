@@ -52,12 +52,16 @@ class PlanApplyTests(unittest.TestCase):
         self.assertEqual(plan.persistent_count, 0)
         self.assertEqual(plan.temporary_keys, ((7, "discord.exe"),))
 
-    def test_existing_profile_rule_supersedes_temporary_targets(self):
+    def test_only_saved_profiles_supersede_temporary_targets(self):
         rule = AppRule("Discord.exe", 50, process_signature="discord.exe|main")
         row = live_row(3, rule=rule)
-        other = live_row(4, "Spotify.exe", signature=None)
-        plan = plan_apply([other], by_id(row, other), [rule], 10, Mock())
-        self.assertEqual(plan.superseded_keys, frozenset({(3, "discord.exe")}))
+        other = live_row(4, "Spotify.exe", signature="spotify.exe|main")
+        for selected in (row, other):
+            with self.subTest(executable=selected.executable):
+                plan = plan_apply([selected], by_id(row, other), [rule], 10, Mock())
+                self.assertEqual(plan.superseded_keys, frozenset({
+                    (selected.process_id, selected.executable.casefold()),
+                }))
 
 
 class PlanRemovalTests(unittest.TestCase):

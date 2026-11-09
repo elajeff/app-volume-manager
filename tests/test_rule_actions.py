@@ -25,6 +25,27 @@ def check_the_only_row(app):
 
 
 class RuleActionTests(unittest.TestCase):
+    def test_applying_to_another_app_keeps_the_temporary_volume(self):
+        rule = AppRule("Discord.exe", 70, process_signature="discord.exe|main")
+        session = discord()
+        session.process_signature = rule.process_signature
+        other = AudioSession(
+            "Spotify.exe", "spotify", lambda _value: None, process_id=456,
+            current_volume=100, process_signature="spotify.exe|main",
+        )
+        app = open_window(self, sessions=[session, other], rules=[rule])
+        app.temporary.add(KEY, 20, running_process())
+        app._scan_sessions()
+        app.checked_rows.add(next(
+            row.row_id for row in app._all_row_info.values() if row.executable == "Spotify.exe"
+        ))
+        app.target_volume_var.set(40)
+
+        app.apply_to_selected()
+
+        self.assertEqual(app.temporary.get(KEY), 20)
+        self.assertEqual(session.current_volume, 20)
+
     def test_temporary_target_survives_audio_gap_but_expires_with_process(self):
         app = open_window(self)
         process = running_process()
