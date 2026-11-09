@@ -8,9 +8,8 @@ from app_volume_manager import startup
 
 
 class StartupTests(unittest.TestCase):
-    def test_startup_is_disabled_and_cannot_be_enabled_off_windows(self):
+    def test_startup_cannot_be_enabled_off_windows(self):
         with patch.object(startup.os, "name", "posix"):
-            self.assertFalse(startup.is_startup_enabled())
             with self.assertRaises(OSError):
                 startup.set_startup_enabled(True)
 
@@ -20,15 +19,6 @@ class StartupTests(unittest.TestCase):
             command = startup._startup_command()
         self.assertIn("--minimized", command)
         self.assertIn("AppVolumeManager.exe", command)
-
-    def test_task_query_and_legacy_startup_status(self):
-        for query, legacy, enabled in (
-            ("true", False, True), ("outdated", False, True), ("false", True, True), ("false", False, False),
-        ):
-            with self.subTest(query=query, legacy=legacy), patch.object(startup.os, "name", "nt"), \
-                 patch.object(startup, "_run_task_command", return_value=query), \
-                 patch.object(startup, "_legacy_enabled", return_value=legacy):
-                self.assertEqual(startup.is_startup_enabled(), enabled)
 
     def test_enable_disable_and_failed_registration_preserve_legacy_when_needed(self):
         for enabled in (True, False):

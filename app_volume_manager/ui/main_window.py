@@ -79,8 +79,7 @@ class VolumeManagerApp:
         self.checked_rows: set[str] = set()
         self._row_info: dict[str, ProcessRow] = {}
         self._all_row_info: dict[str, ProcessRow] = {}
-        # Temporary PID-scoped targets are used only when Windows doesn't expose
-        # enough stable role information to create a safe persistent profile.
+        # Temporary targets last only while the selected process instance runs.
         self.temporary = TemporaryTargets()
         self.tray_icon = None
         self._closing = False
@@ -98,8 +97,7 @@ class VolumeManagerApp:
 
         self.root.title(APP_NAME)
         self.root.geometry("1000x620")
-        # Keep the window comfortably resizable while protecting the controls at
-        # the bottom from being pushed off-screen by the process table.
+        # Leave room for the controls below the process table.
         self.root.minsize(820, 460)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         self.root.bind("<Map>", self._on_visibility_event, add="+")
@@ -189,20 +187,14 @@ class VolumeManagerApp:
         """Apply a small, consistent light or dark palette to the Tk UI."""
         self.theme = theme if theme in PALETTES else "light"
         self.style, self.colors = apply_base_theme(self.root, self.theme)
-        self._configure_volume_slider_style()
-        self._configure_scrollbar_styles()
-
-    def _configure_scrollbar_styles(self) -> None:
-        configure_scrollbars(self.style, self.colors, self.slider_thumb_color)
-
-    def _configure_volume_slider_style(self) -> None:
         configure_volume_slider(self.style, self.colors, self.slider_thumb_color)
+        configure_scrollbars(self.style, self.colors, self.slider_thumb_color)
 
     def _set_slider_thumb_color(self, color: str) -> None:
         """Update the visible slider; persistence is handled separately."""
         self.slider_thumb_color = normalize_hex_color(color)
-        self._configure_volume_slider_style()
-        self._configure_scrollbar_styles()
+        configure_volume_slider(self.style, self.colors, self.slider_thumb_color)
+        configure_scrollbars(self.style, self.colors, self.slider_thumb_color)
 
     def change_theme(self, _event=None) -> None:
         requested = self.theme_var.get().casefold()
@@ -218,9 +210,7 @@ class VolumeManagerApp:
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, padding=14)
         outer.pack(fill="both", expand=True)
-        # Grid gives the process table the only expandable row. Unlike a long
-        # pack() chain, a short window compresses the table instead of letting
-        # its requested 14-row height push the volume/actions/settings off-screen.
+        # Let the table shrink with the window so the controls stay visible.
         outer.grid_columnconfigure(0, weight=1)
         outer.grid_rowconfigure(3, weight=1)
 

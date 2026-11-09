@@ -18,8 +18,6 @@ HEADINGS = (
 
 class ProcessTable:
     def __init__(self, parent: tk.Misc, on_click: Callable) -> None:
-        # Parent the Treeview to the frame itself; parenting it to the window
-        # and packing it in with in_= left it covered on Windows (a blank table).
         self.frame = ttk.Frame(parent)
         self.tree = ttk.Treeview(
             self.frame, columns=[name for name, _title in HEADINGS],

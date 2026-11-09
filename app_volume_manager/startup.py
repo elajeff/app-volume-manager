@@ -133,12 +133,6 @@ def _remove_legacy() -> None:
         pass
 
 
-def is_startup_enabled() -> bool:
-    if os.name != "nt":
-        return False
-    return _run_task_command("query") in {"true", "outdated"} or _legacy_enabled()
-
-
 def set_startup_enabled(enabled: bool) -> None:
     if os.name != "nt":
         raise OSError("Automatic startup is only supported on Windows.")
