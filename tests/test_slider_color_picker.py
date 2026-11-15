@@ -4,13 +4,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 
-from tests.support import FakePreferenceStore, open_window
-
-
-def descendants(widget):
-    for child in widget.winfo_children():
-        yield child
-        yield from descendants(child)
+from tests.support import FakePreferenceStore, descendants, open_window
 
 
 class SliderColorPickerInteractionTests(unittest.TestCase):
