@@ -146,6 +146,72 @@ class AudioSessionMonitor:
             except Exception:
                 log.debug("Could not unregister session events", exc_info=True)
 
+    def _register_devices(self, active_devices: dict, callback_type, errors: list[str]) -> bool:
+        """Register each active output once and drop removed ones; return whether the set changed."""
+        changed = False
+        # Unregister endpoints that disappeared or were disabled.
+        for device_id in list(self._registrations):
+            if device_id not in active_devices:
+                manager, callback, _name = self._registrations.pop(device_id)
+                try:
+                    manager.UnregisterSessionNotification(callback)
+                except Exception:
+                    log.debug("Could not unregister a removed device", exc_info=True)
+                for key in list(self._session_registrations):
+                    if key[0] == device_id:
+                        self._unwatch_session(key)
+                changed = True
+
+        for device_id, device in active_devices.items():
+            name = str(getattr(device, "FriendlyName", "Playback device") or "Playback device")
+            try:
+                if device_id not in self._registrations:
+                    manager = device.AudioSessionManager
+                    callback = callback_type(
+                        lambda session, eid=device_id, dname=name: self._new_session(session, eid, dname)
+                    )
+                    manager.RegisterSessionNotification(callback)
+                    self._registrations[device_id] = (manager, callback, name)
+                    changed = True
+                self._sync_sessions(device_id)
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+                # Remove a partially registered entry so the next pass retries.
+                registration = self._registrations.pop(device_id, None)
+                if registration is not None:
+                    try:
+                        registration[0].UnregisterSessionNotification(registration[1])
+                    except Exception:
+                        log.debug("Could not unregister a failed device", exc_info=True)
+        return changed
+
+    def _sync_sessions(self, device_id: str) -> None:
+        """Watch the sessions on one registered output and stop watching ended ones."""
+        from pycaw.callbacks import AudioSessionEvents
+        from pycaw.pycaw import AudioSession, IAudioSessionControl2
+
+        # GetCount() activates session notifications according to Windows
+        # Core Audio's requirements.
+        enumerator = self._registrations[device_id][0].GetSessionEnumerator()
+        live_keys = set()
+        for index in range(enumerator.GetCount()):
+            control = enumerator.GetSession(index)
+            if control is not None:
+                session = AudioSession(control.QueryInterface(IAudioSessionControl2))
+                self._watch_session(session, device_id, AudioSessionEvents)
+                if session.State != 2:
+                    live_keys.add((device_id, str(session.InstanceIdentifier)))
+        for key in list(self._session_registrations):
+            if key[0] == device_id and key not in live_keys:
+                self._unwatch_session(key)
+
+    def _wait_for_events(self, healthy: bool) -> None:
+        """Sleep until a notification arrives, or until the next periodic device check."""
+        interval = self.DEVICE_REFRESH_SECONDS if healthy else self.RETRY_SECONDS
+        if not self._refresh_event.wait(interval):
+            # Periodic safety net in case a device notification was missed.
+            self._devices_changed.set()
+
     def _run(self) -> None:
         comtypes = None
         com_initialized = False
@@ -158,9 +224,9 @@ class AudioSessionMonitor:
             comtypes = comtypes_module
             comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
             com_initialized = True
-            from pycaw.callbacks import AudioSessionEvents, AudioSessionNotification, MMNotificationClient
+            from pycaw.callbacks import AudioSessionNotification, MMNotificationClient
             from pycaw.constants import DEVICE_STATE, EDataFlow
-            from pycaw.pycaw import AudioSession, AudioUtilities, IAudioSessionControl2
+            from pycaw.pycaw import AudioUtilities
 
             class SessionCreatedCallback(AudioSessionNotification):
                 def __init__(self, handler):
@@ -213,71 +279,11 @@ class AudioSessionMonitor:
                         for device in (devices or [])
                         if str(getattr(device, "id", ""))
                     }
-                changed = False
-
-                # Unregister endpoints that disappeared or were disabled.
-                for device_id in list(self._registrations):
-                    if device_id not in active_devices:
-                        manager, callback, _name = self._registrations.pop(device_id)
-                        try:
-                            manager.UnregisterSessionNotification(callback)
-                        except Exception:
-                            log.debug("Could not unregister a removed device", exc_info=True)
-                        for key in list(self._session_registrations):
-                            if key[0] == device_id:
-                                self._unwatch_session(key)
-                        changed = True
-
-                # Register each active output once. GetCount() activates session
-                # notifications according to Windows Core Audio's requirements.
-                for device_id, device in active_devices.items():
-                    name = str(getattr(device, "FriendlyName", "Playback device") or "Playback device")
-                    try:
-                        if device_id not in self._registrations:
-                            manager = device.AudioSessionManager
-                            callback = SessionCreatedCallback(
-                                lambda session, eid=device_id, dname=name: self._new_session(
-                                    session, eid, dname
-                                )
-                            )
-                            manager.RegisterSessionNotification(callback)
-                            self._registrations[device_id] = (manager, callback, name)
-                            changed = True
-                        manager = self._registrations[device_id][0]
-                        enumerator = manager.GetSessionEnumerator()
-                        live_keys = set()
-                        for index in range(enumerator.GetCount()):
-                            control = enumerator.GetSession(index)
-                            if control is not None:
-                                session = AudioSession(control.QueryInterface(IAudioSessionControl2))
-                                self._watch_session(session, device_id, AudioSessionEvents)
-                                if session.State != 2:
-                                    live_keys.add((device_id, str(session.InstanceIdentifier)))
-                        for key in list(self._session_registrations):
-                            if key[0] == device_id and key not in live_keys:
-                                self._unwatch_session(key)
-                    except Exception as exc:
-                        errors.append(f"{name}: {exc}")
-                        # Remove a partially registered entry so the next pass retries.
-                        registration = self._registrations.pop(device_id, None)
-                        if registration is not None:
-                            try:
-                                registration[0].UnregisterSessionNotification(registration[1])
-                            except Exception:
-                                log.debug("Could not unregister a failed device", exc_info=True)
-
+                changed = self._register_devices(active_devices, SessionCreatedCallback, errors)
                 self._set_status(bool(self._registrations), " | ".join(errors[:2]) or None)
                 if changed:
                     self._signal_change(DEVICES_CHANGED)
-
-                registration_healthy = self.is_ready and not errors
-                interval = (
-                    self.DEVICE_REFRESH_SECONDS if registration_healthy
-                    else self.RETRY_SECONDS
-                )
-                if not self._refresh_event.wait(interval):
-                    # Periodic safety net in case a device notification was missed.
-                    self._devices_changed.set()
+                self._wait_for_events(self.is_ready and not errors)
         except Exception as exc:
             self._set_status(False, str(exc))
         finally:
