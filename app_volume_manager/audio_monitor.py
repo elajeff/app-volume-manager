@@ -144,7 +144,7 @@ class AudioSessionMonitor:
             try:
                 registration[0].unregister_notification()
             except Exception:
-                pass
+                log.debug("Could not unregister session events", exc_info=True)
 
     def _run(self) -> None:
         comtypes = None
@@ -222,7 +222,7 @@ class AudioSessionMonitor:
                         try:
                             manager.UnregisterSessionNotification(callback)
                         except Exception:
-                            pass
+                            log.debug("Could not unregister a removed device", exc_info=True)
                         for key in list(self._session_registrations):
                             if key[0] == device_id:
                                 self._unwatch_session(key)
@@ -264,7 +264,7 @@ class AudioSessionMonitor:
                             try:
                                 registration[0].UnregisterSessionNotification(registration[1])
                             except Exception:
-                                pass
+                                log.debug("Could not unregister a failed device", exc_info=True)
 
                 self._set_status(bool(self._registrations), " | ".join(errors[:2]) or None)
                 if changed:

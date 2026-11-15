@@ -1,11 +1,16 @@
 """Enumerate Windows playback audio sessions and expose safe volume callbacks."""
 
+import logging
 import sys
 import warnings
 from pathlib import PureWindowsPath
 
+import psutil
+
 from app_volume_manager.process_identity import identify_process_role
 from app_volume_manager.volume_service import AudioSession
+
+log = logging.getLogger(__name__)
 
 
 class AudioBackendError(RuntimeError):
@@ -74,17 +79,15 @@ class WindowsAudioBackend:
             # Some transient or inaccessible sessions don't resolve through
             # pycaw's convenience property; try the underlying psutil lookup.
             try:
-                import psutil
-
                 process = psutil.Process(process_id)
-            except Exception:
+            except psutil.Error:
                 process = None
 
         started = None
         if process is not None:
             try:
                 started = process.create_time()
-            except Exception:
+            except psutil.Error:
                 pass
         cached = self._identities.get(process_id)
         if started is not None and cached is not None and cached[0] == started:
@@ -96,15 +99,15 @@ class WindowsAudioBackend:
         if process is not None:
             try:
                 executable = str(process.name() or "")
-            except Exception:
+            except psutil.Error:
                 pass
             try:
                 executable_path = str(process.exe() or "")
-            except Exception:
+            except psutil.Error:
                 pass
             try:
                 command_line = process.cmdline()
-            except Exception:
+            except psutil.Error:
                 command_line = None
 
         if not executable and executable_path:
@@ -143,6 +146,7 @@ class WindowsAudioBackend:
         except Exception:
             # The regular enumeration path will retry if this transient session
             # cannot be wrapped directly.
+            log.debug("Could not wrap a notified audio session", exc_info=True)
             return None
 
     def _wrap_session(self, session, endpoint_id: str, device_name: str, index: int):
