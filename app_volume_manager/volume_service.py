@@ -50,15 +50,6 @@ class VolumeRuleEngine:
         rule = resolve_rule(session.executable, session.process_signature, app_rules, process_rules)
         return rule.volume if rule is not None and rule.enabled else None
 
-    def apply_new_session(
-        self,
-        session: AudioSession,
-        rules: Iterable[AppRule],
-        temporary_targets: dict[tuple[int, str], int] | None = None,
-    ) -> ScanResult:
-        """Apply a rule in the session-created callback without sweeping other sessions."""
-        return self.scan([session], rules, temporary_targets=temporary_targets)
-
     def scan(
         self,
         sessions: Iterable[AudioSession],

@@ -429,9 +429,7 @@ class VolumeManagerApp:
         """Apply a persistent rule on the Core Audio callback thread immediately."""
         if self._closing:
             return
-        self.engine.apply_new_session(
-            session, tuple(self.rules), temporary_targets=self.temporary.live()
-        )
+        self.engine.scan([session], tuple(self.rules), temporary_targets=self.temporary.live())
         # AudioSessionMonitor queues the GUI refresh after this callback returns.
         # COM session objects themselves never cross from the callback thread to Tk.
 

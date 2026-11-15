@@ -115,19 +115,8 @@ class PreferenceStore:
                 raise ValueError("Unsupported preferences format.")
             if data.get("theme") not in self.THEMES:
                 raise ValueError("Theme must be 'light' or 'dark'.")
-            # Migrate the former preference key on the next save. It remains
-            # readable so existing installations keep their chosen color.
-            color = data.get(
-                "slider_thumb_color",
-                data.get("knob_color", self.DEFAULT_SLIDER_THUMB_COLOR),
-            )
-            color = normalize_hex_color(color)
-            # Remove the legacy key so writes migrate to one canonical field.
-            normalized = {
-                key: value for key, value in data.items()
-                if key not in {"knob_color", "slider_thumb_color"}
-            }
-            return {**normalized, "slider_thumb_color": color}
+            color = normalize_hex_color(data.get("slider_thumb_color", self.DEFAULT_SLIDER_THUMB_COLOR))
+            return {**data, "slider_thumb_color": color}
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise SettingsError(
                 f"Could not read preferences file:\n{self.path}\n\n"
@@ -135,7 +124,7 @@ class PreferenceStore:
             ) from exc
 
     def load_preferences(self) -> tuple[str, str]:
-        """Return the saved theme and slider color, with migration for older installs."""
+        """Return the saved theme and slider color."""
         data = self._read_preferences()
         return data["theme"], data["slider_thumb_color"]
 

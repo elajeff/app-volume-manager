@@ -37,9 +37,9 @@ class WindowsIntegrationTests(unittest.TestCase):
              patch.object(startup, "_remove_legacy"), \
              patch.object(startup, "_legacy_enabled", return_value=False):
             try:
-                self.assertFalse(startup.is_startup_enabled())
+                self.assertFalse(startup.check_startup())
                 startup.set_startup_enabled(True)
-                self.assertTrue(startup.is_startup_enabled())
+                self.assertTrue(startup.check_startup())
                 self.assertEqual(startup._run_task_command("query"), "true")
 
                 # A task registered by an older version at Task Scheduler's
@@ -51,4 +51,4 @@ class WindowsIntegrationTests(unittest.TestCase):
                 self.assertEqual(startup._run_task_command("query"), "true")
             finally:
                 startup.set_startup_enabled(False)
-            self.assertFalse(startup.is_startup_enabled())
+            self.assertFalse(startup.check_startup())
