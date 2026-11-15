@@ -104,6 +104,13 @@ def open_window(test, sessions=(), rules=(), start_minimized=False, **overrides)
     return app
 
 
+def click_row(app, row_id, column="application"):
+    """Click a cell of a process row the way a user would."""
+    app.root.update()
+    x, y, _width, _height = app.table.bbox(row_id, column)
+    app.table.event_generate("<Button-1>", x=x + 2, y=y + 2)
+
+
 def close_window(app):
     """Close a test window; pending idle callbacks run first so they do not outlive it."""
     try:

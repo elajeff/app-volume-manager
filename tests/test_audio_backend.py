@@ -197,9 +197,11 @@ class AudioBackendTests(unittest.TestCase):
         self.assertEqual(session.Process.cmdline_reads, 2)
         session.Process.cmdline_error = None
         self.sweep(backend, [session])
-        self.assertIn(555, backend._identities)
+        self.sweep(backend, [session])
+        self.assertEqual(session.Process.cmdline_reads, 3)
         self.sweep(backend, [])
-        self.assertEqual(backend._identities, {})
+        self.sweep(backend, [session])
+        self.assertEqual(session.Process.cmdline_reads, 4)
 
 
 if __name__ == "__main__":

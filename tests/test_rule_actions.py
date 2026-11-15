@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from app_volume_manager.rules import AppRule
 from app_volume_manager.settings import SettingsError
 from app_volume_manager.volume_service import AudioSession
-from tests.support import close_window, open_window
+from tests.support import click_row, close_window, open_window
 
 MESSAGEBOX = "app_volume_manager.ui.main_window.messagebox"
 KEY = (123, "discord.exe")
@@ -21,7 +21,7 @@ def running_process():
 
 
 def check_the_only_row(app):
-    app.checked_rows.add(next(iter(app._all_row_info)))
+    click_row(app, app.table.get_children()[0])
 
 
 class RuleActionTests(unittest.TestCase):
@@ -29,17 +29,17 @@ class RuleActionTests(unittest.TestCase):
         app = open_window(self)
         process = running_process()
         app.temporary.add(KEY, 20, process)
-        app._scan_sessions(update_table=False)
+        app.refresh_list()
         self.assertEqual(app.temporary.get(KEY), 20)
         calls = []
         session = discord(calls.append)
         app.backend.sessions = [session]
-        app._scan_sessions(update_table=False)
+        app.refresh_list()
         self.assertEqual(calls, [20])
         # psutil's retained Process object detects termination and PID reuse.
         process.is_running = lambda: False
         session.current_volume = 100
-        app._scan_sessions(update_table=False)
+        app.refresh_list()
         self.assertEqual(calls, [20])
         self.assertEqual(app.temporary.live(), {})
         self.assertNotIn(KEY, app.temporary)
@@ -52,7 +52,8 @@ class RuleActionTests(unittest.TestCase):
         with patch("app_volume_manager.selection.psutil.Process", return_value=process):
             app.apply_to_selected()
         self.assertEqual(app.temporary.get(KEY), 20)
-        self.assertIs(app.temporary._processes[KEY], process)
+        process.is_running = lambda: False
+        self.assertEqual(app.temporary.live(), {})
         self.assertEqual(app.store.saved, [])
 
     def remove_selected(self, saved, confirmed):
