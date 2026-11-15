@@ -139,7 +139,7 @@ class ProcessSearchTests(unittest.TestCase):
         x, _y, _width, _height = self.app.table.bbox(discord_id, "pid")
         self.app.table.event_generate("<Button-1>", x=x + 2, y=2)
         self.assertEqual(self.app.checked_rows, set())
-        self.assertEqual(self.app.table.item(discord_id, "values")[0], "2610")
+        self.assertEqual(self.app.table.item(discord_id, "values")[0], "☐")
 
     def test_rows_appearing_or_leaving_rebuild_the_table_and_keep_a_surviving_selection(self):
         spotify_id = self.row_id("Spotify.exe")
