@@ -3,6 +3,8 @@ import types
 import unittest
 from unittest.mock import patch
 
+import psutil
+
 from app_volume_manager.audio_backend import WindowsAudioBackend
 
 
@@ -190,7 +192,7 @@ class AudioBackendTests(unittest.TestCase):
 
     def test_unreadable_command_lines_are_retried_and_closed_processes_forgotten(self):
         session = _Session(pid=555)
-        session.Process.cmdline_error = PermissionError("starting up")
+        session.Process.cmdline_error = psutil.AccessDenied(555)
         backend = WindowsAudioBackend()
         self.sweep(backend, [session])
         self.sweep(backend, [session])
