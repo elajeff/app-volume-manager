@@ -41,7 +41,7 @@ class ProcessTableLayoutTests(unittest.TestCase):
 
         # Automatic table refreshes should not discard the user's blue row highlight.
         app.table.selection_set(rows[0])
-        app._refresh_table()
+        app.refresh_list()
         self.assertEqual(app.table.selection(), (rows[0],))
 
 

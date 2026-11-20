@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from app_volume_manager.ui.volume_scale import allow_scale_thumb_click
 from app_volume_manager.volume_service import AudioSession
-from tests.support import open_window
+from tests.support import click_row, open_window
 
 
 class FakeScale:
@@ -30,17 +30,15 @@ class ScaleInteractionTests(unittest.TestCase):
         app = open_window(self, sessions=[
             AudioSession("Discord.exe", "session", lambda _value: None, process_id=4242, current_volume=35),
         ])
-        row_id = next(iter(app._all_row_info))
+        row_id = app.table.get_children()[0]
         self.assertTrue(app.volume_scale.instate(["disabled"]))
         self.assertEqual(app.target_volume_label.get(), "Select a process to change volume")
 
-        app.checked_rows.add(row_id)
-        app._sync_volume_scale_enabled()
+        click_row(app, row_id)
         self.assertTrue(app.volume_scale.instate(["!disabled"]))
         self.assertEqual(app.target_volume_label.get(), "Volume for selected: 50%")
 
-        app.checked_rows.clear()
-        app._sync_volume_scale_enabled()
+        click_row(app, row_id)
         self.assertTrue(app.volume_scale.instate(["disabled"]))
 
 
