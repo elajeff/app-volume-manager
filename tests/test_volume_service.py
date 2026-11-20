@@ -59,9 +59,9 @@ class VolumeRuleEngineTests(unittest.TestCase):
                                process_id=123, current_volume=100)
         targets = {(123, "discord.exe"): 20}
         rules = [AppRule("Discord.exe", 70)]
-        self.engine.apply_new_session(session, rules, targets)
+        self.engine.scan([session], rules, temporary_targets=targets)
         session.current_volume = 100
-        self.engine.apply_new_session(session, rules, targets)
+        self.engine.scan([session], rules, temporary_targets=targets)
         self.assertEqual(calls, [20, 20])
 
     def test_adjusts_all_matching_sessions_and_continues_after_an_error(self):
@@ -85,7 +85,7 @@ class VolumeRuleEngineTests(unittest.TestCase):
         existing, new = self.session(session_id="existing"), self.session(session_id="new")
         rules = [AppRule("Discord.exe", 22)]
         self.engine.scan([existing], rules)
-        immediate = self.engine.apply_new_session(new, rules)
+        immediate = self.engine.scan([new], rules)
         self.engine.scan([existing, new], rules)
         self.assertEqual(immediate.applied_count, 1)
         self.assertEqual(set(self.calls), {("existing", 22), ("new", 22)})

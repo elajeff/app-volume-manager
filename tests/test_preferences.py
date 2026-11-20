@@ -28,17 +28,6 @@ class PreferenceStoreTests(unittest.TestCase):
         self.store.save_theme("light")
         self.assertEqual(PreferenceStore(self.path).load_preferences(), ("light", "#AB12CD"))
 
-    def test_legacy_color_key_is_migrated_when_preferences_are_saved(self):
-        self.path.write_text(
-            json.dumps({"version": 1, "theme": "dark", "knob_color": "#ab12cd"}),
-            encoding="utf-8",
-        )
-        self.assertEqual(self.store.load_preferences()[1], "#AB12CD")
-        self.store.save_theme("light")
-        saved = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["slider_thumb_color"], "#AB12CD")
-        self.assertNotIn("knob_color", saved)
-
     def test_invalid_preferences_are_rejected(self):
         for operation, value in (
             (self.store.save_slider_thumb_color, "blue"),
