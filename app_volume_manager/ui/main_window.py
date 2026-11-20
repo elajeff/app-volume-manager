@@ -28,7 +28,7 @@ from app_volume_manager.single_instance import SingleInstance
 from app_volume_manager.ui import APP_NAME
 from app_volume_manager.ui.process_table import ProcessTable
 from app_volume_manager.ui.rule_dialog import show_rule_dialog
-from app_volume_manager.ui.slider_color_dialog import show_slider_color_dialog
+from app_volume_manager.ui.slider_color_dialog import SliderColorDialog
 from app_volume_manager.ui.theme import PALETTES, apply_base_theme, configure_scrollbars, configure_volume_slider
 from app_volume_manager.ui.tray import start_tray_icon
 from app_volume_manager.ui.volume_scale import allow_scale_thumb_click, percent
@@ -464,13 +464,13 @@ class VolumeManagerApp:
         self.target_volume_label.set(f"Volume for selected: {percent(value)}%")
 
     def edit_slider_thumb_color(self) -> None:
-        show_slider_color_dialog(
+        SliderColorDialog(
             self.root,
             self.slider_thumb_color,
             self.preference_store,
             self._set_slider_thumb_color,
             self.status_var,
-        )
+        ).show()
 
     def _selected_rows(self) -> list[ProcessRow]:
         return [self._all_row_info[row_id] for row_id in self.checked_rows if row_id in self._all_row_info]
