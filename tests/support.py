@@ -104,6 +104,12 @@ def open_window(test, sessions=(), rules=(), start_minimized=False, **overrides)
     return app
 
 
+def descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from descendants(child)
+
+
 def click_row(app, row_id, column="application"):
     """Click a cell of a process row the way a user would."""
     app.root.update()

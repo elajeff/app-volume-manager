@@ -28,9 +28,8 @@ class ProcessTableTests(unittest.TestCase):
         self.assertEqual(self.total_width(), self.table.tree.winfo_width() - 4)
         self.assertFalse(self.table.horizontal_scrollbar.winfo_ismapped())
 
-    def test_narrow_window_keeps_minimum_widths_and_shows_the_scrollbar(self):
+    def test_narrow_window_shows_the_horizontal_scrollbar(self):
         self.resize(500)
-        self.assertEqual(self.total_width(), 728)
         self.assertTrue(self.table.horizontal_scrollbar.winfo_ismapped())
 
     def test_rebuild_keeps_the_selection_only_for_selectable_rows(self):

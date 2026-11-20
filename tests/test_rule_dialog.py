@@ -5,12 +5,7 @@ from unittest.mock import Mock, patch
 
 from app_volume_manager.rules import AppRule
 from app_volume_manager.ui.rule_dialog import show_rule_dialog
-
-
-def descendants(widget):
-    for child in widget.winfo_children():
-        yield child
-        yield from descendants(child)
+from tests.support import descendants
 
 
 class RuleDialogTests(unittest.TestCase):

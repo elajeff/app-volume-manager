@@ -1,10 +1,11 @@
-"""Regression checks for process search, selection, and list scrollbars."""
+"""Regression checks for the process list: rows, search, selection, refresh and scrollbars."""
 
 import unittest
+from tkinter import ttk
 from unittest.mock import patch
 
 from app_volume_manager.volume_service import AudioSession
-from tests.support import click_row, open_window
+from tests.support import click_row, descendants, open_window
 
 
 class ProcessSearchTests(unittest.TestCase):
@@ -30,6 +31,28 @@ class ProcessSearchTests(unittest.TestCase):
     def set_sessions(self, sessions):
         self.app.backend.sessions = list(sessions)
         self.app.refresh_list()
+
+    def test_active_process_row_shows_its_details(self):
+        values = self.app.table.item(self.row_id("Discord.exe"), "values")
+        self.assertEqual(values[2], "4242")
+        self.assertEqual(values[3], "1")  # one Windows audio session for this process
+        self.assertEqual(values[7], "Not configured")
+        headings = [self.app.table.heading(column, "text") for column in self.app.table["columns"]]
+        self.assertIn("Rule status", headings)
+        self.assertIn("Sessions", headings)
+        self.assertNotIn("Process role", headings)
+
+    def test_refresh_button_lists_devices_again_and_shows_new_sessions(self):
+        button = next(
+            widget for widget in descendants(self.root)
+            if isinstance(widget, ttk.Button) and widget.cget("text") == "Refresh list"
+        )
+        self.app.backend.sessions = [AudioSession("Steam.exe", "steam-session", lambda _value: None, process_id=77)]
+        button.invoke()
+        self.assertEqual(self.app.backend.invalidated, 1)
+        self.assertEqual([self.app.table.item(row, "values")[1] for row in self.app.table.get_children()],
+                         ["Steam.exe"])
+        self.assertIn("1 process", self.app.status_var.get())
 
     def test_search_matches_executable_pid_and_device_case_insensitively(self):
         self.app.search_var.set("DISCORD 4242")
@@ -106,9 +129,17 @@ class ProcessSearchTests(unittest.TestCase):
         delete.assert_not_called()
         self.assertEqual(self.app.table.item(discord_id, "values")[0], "\u2611")
         self.assertEqual(self.app.table.selection(), (discord_id,))
+        self.assertEqual(self.app.table.focus(), discord_id)
         self.assertIn("1 selected", self.app.search_summary_var.get())
         click_row(self.app, discord_id)
         self.assertEqual(self.app.table.item(discord_id, "values")[0], "\u2610")
+
+    def test_clicking_the_heading_does_not_check_a_row(self):
+        discord_id = self.row_id("Discord.exe")
+        x, _y, _width, _height = self.app.table.bbox(discord_id, "pid")
+        self.app.table.event_generate("<Button-1>", x=x + 2, y=2)
+        self.assertEqual(self.app.checked_rows, set())
+        self.assertEqual(self.app.table.item(discord_id, "values")[0], "☐")
 
     def test_rows_appearing_or_leaving_rebuild_the_table_and_keep_a_surviving_selection(self):
         spotify_id = self.row_id("Spotify.exe")
